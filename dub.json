@@ -1,0 +1,9 @@
+{
+	"authors": [
+		"Chubak Bidpaa"
+	],
+	"copyright": "Copyright © 2024, Chubak Bidpaa",
+	"description": "An implementation of Lua in D",
+	"license": "MIT",
+	"name": "moonix"
+}

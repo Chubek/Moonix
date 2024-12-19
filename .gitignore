@@ -1,0 +1,16 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/moonix
+moonix.so
+moonix.dylib
+moonix.dll
+moonix.a
+moonix.lib
+moonix-test-*
+*.exe
+*.pdb
+*.o
+*.obj
+*.lst
