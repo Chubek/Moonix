@@ -2,342 +2,593 @@ module moonix.absyn;
 
 import std.typecons;
 
-alias BracketPair = Tuple!(Expression, "lhs", Expression, "rhs");
-alias NamedPair = Tuple!(Name, "name", Expression, "expression");
-alias Bracketed = Tuple!(PrefixExpression, "prefixes", Expression, "bracket");
-alias Prefixed = Tuple!(PrefixExpression, "prefixes", Name, "name");
-alias IfPair = Tuple!(Expression, "condition", Block, "block");
-
-abstract class ASTNode
+interface ASTNode
 {
-    size_t line_no;
-    size_t column_no;
+    T accept(T)(NodeVisitor!T visitor);
 }
 
-class Name : ASTNode
+interface Expr : Node
 {
-    string value;
 }
 
-class String : ASTNode
+interface Stat : Node
 {
-    string value;
 }
 
-enum NumberKind
+template NodeVisitor(R)
 {
-    Integer,
-    Real,
-}
-
-class Number : ASTNode
-{
-    NumberKind kind;
-
-    union
+    interface NodeVisitor
     {
-        long v_integer;
-        double v_real;
+        R visitBlock(Block stat);
+        R visitAssign(Assign stat);
+        R visitFunctionCallStat(FunctionCallStat stat);
+        R visitDo(Do stat);
+        R visitWhile(While stat);
+        R visitRepeat(Repeat stat);
+        R visitIf(If stat);
+        R visitFor(For stat);
+        R visitForIn(ForIn stat);
+        R visitFunctionDef(FunctionDef stat);
+        R visitLocalFunction(LocalFunction stat);
+        R visitLocalVars(LocalVars stat);
+        R visitReturn(Return stat);
+        R visitBreak(Break stat);
+        R visitGoto(Goto stat);
+        R visitLabel(Label stat);
+
+        R visitNil(Nil expr);
+        R visitBoolean(Boolean expr);
+        R visitNumber(Number expr);
+        R visitString(String expr);
+        R visitVarargs(Varargs expr);
+        R visitFunctionThunk(FunctionThunk expr);
+        R visitBinary(Binary expr);
+        R visitUnary(Unary expr);
+        R visitName(Name expr);
+        R visitIndex(Index expr);
+        R visitField(Field expr);
+        R visitMethodCall(MethodCall expr);
+        R visitFunctionCallExpr(FunctionCallExpr expr);
+        R visitTable(Table expr);
     }
 }
 
-enum ExpressionKind
+class Block : Stat
 {
-    Nil,
-    False,
-    True,
-    Number,
-    String,
-    Ellipses,
-    Function,
-    UnaryExpression,
-    BinaryExpression,
-    PrefixExpression,
-    TableConstructor,
-}
+    Stat[] statements;
+    Stat laststat;
 
-class Expression : ASTNode
-{
-    ExpressionKind kind;
-
-    union
+    this(Stat[] statements, Stat laststat = null)
     {
-        Number v_number;
-        String v_string;
-        Function v_function;
-        UnaryExpression v_unary_expression;
-        BinaryExpression v_binary_expression;
-        PrefixExpression v_prefix_expression;
-        TableConstructor v_table_constrcutor;
+        this.statements = statements;
+        this.laststat = laststat;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitBlock(this);
     }
 }
 
-enum PrefixExpressionKind
+class Assign : Stat
 {
-    Variable,
-    NestedExpression,
-    FunctionCall,
-}
+    Expr[] vars;
+    Expr[] values;
 
-class PrefixExpression : ASTNode
-{
-    PrefixExpressionKind kind;
-
-    union
+    this(Expr[] vars, Expr[] values)
     {
-        FunctionCall v_function_call;
-        Expression v_nested_expression;
-        Variable v_variable;
+        this.vars = vars;
+        this.values = values;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitAssign(this);
     }
 }
 
-enum ArgumentKind
+class FunctionCallStat : Stat
 {
-    TableConstructor,
-    ExpressionList,
-    String,
-}
+    FunctionCallExpr call;
 
-class Argument : ASTNode
-{
-    ArgumentKind kind;
-
-    union
+    this(FunctionCallExpr call)
     {
-        TableConstrcutor v_table_constructor;
-        String v_string;
-        Expression[] v_expression_list;
+        this.call = call;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionCallStat(this);
     }
 }
 
-enum BinaryOperatorKind
-{
-    Plus,
-    Minus,
-    Times,
-    Division,
-    Exponent,
-    Modulo,
-    Concatenation,
-    Lesser,
-    Greater,
-    LesserEqual,
-    GreaterEqual,
-    Equal,
-    Unequal,
-    And,
-    Or,
-}
-
-class BinaryExpression : ASTNode
-{
-    BinaryOperatorKind kind;
-    Expression left;
-    Expression right;
-}
-
-enum UnaryOperatorKind
-{
-    Negate,
-    Not,
-    Length,
-}
-
-class UnaryOperator : ASTNode
-{
-    UnaryOperatorKind kind;
-    Expression subject;
-}
-
-enum FieldKind
-{
-    BracketPair,
-    NamedPair,
-    Expression,
-}
-
-class Field : ASTNode
-{
-    FieldKind kind;
-
-    union
-    {
-        BracketPair v_bracket_pair;
-        NamedPair v_name_pair;
-        Expression v_expression;
-    }
-}
-
-class TableConstructor : ASTNode
-{
-    Field[] fields;
-}
-
-enum ParameterKind
-{
-    Name,
-    Ellipses,
-}
-
-class Parameter : ASTNode
-{
-    ParameterKind kind;
-    Name v_name;
-}
-
-class FunctionThunk : ASTNode
-{
-    Parameter[] parameters;
-    Block block;
-}
-
-class FunctionName : ASTNode
-{
-    Name[] name_list;
-    Name colon_notation;
-}
-
-enum VariableKind
-{
-    Name,
-    Bracketed,
-    Prefixed,
-}
-
-class Variable : ASTNode
-{
-    VariableKind kind;
-
-    union
-    {
-        Name v_name;
-        Bracketed v_bracketed;
-        Prefixed v_prefixed;
-    }
-}
-
-enum StatementKind
-{
-    Label,
-    FunctionCall,
-    Assignment,
-    DoBlock,
-    WhileBlock,
-    RepeatBlock,
-    IfBlock,
-    ForBlock,
-    ForInBlock,
-    FunctionBlock,
-}
-
-class FunctionCall : ASTNode
-{
-    PrefixExpression prefix_expression;
-    Name colon_name;
-    Argument[] arguments;
-}
-
-class FunctionBlock : ASTNode
-{
-    FunctionName name;
-    FunctionThunk thunk;
-    bool is_local;
-}
-
-class Assignment : ASTNode
-{
-    Name[] name_list;
-    Expression[] expression_list;
-    bool is_local;
-}
-
-class DoBlock : ASTNode
+class Do : Stat
 {
     Block block;
+
+    this(Block block)
+    {
+        this.block = block;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitDo(this);
+    }
 }
 
-class WhileBlock : ASTNode
+class While : Stat
 {
-    Expression condition;
+    Expr condition;
     Block block;
+
+    this(Expr condition, Block block)
+    {
+        this.condition = condition;
+        this.block = block;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitWhile(this);
+    }
 }
 
-class RepeatBlock : ASTNode
+class Repeat : Stat
 {
     Block block;
-    Expression condition;
+    Expr condition;
+
+    this(Block block, Expr condition)
+    {
+        this.block = block;
+        this.condition = condition;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitRepeat(this);
+    }
 }
 
-class IfBlock : ASTNode
+class If : Stat
 {
-    IfPair main_pair;
-    IfPair[] elif_pairs;
+    struct CondBlock
+    {
+        Expr condition;
+        Block block;
+    }
+
+    CondBlock[] cond_blocks;
     Block else_block;
-}
 
-class ForBlock : ASTNode
-{
-    NamedPair discriminant;
-    Expression ceiling;
-    Expression step;
-    Block block;
-}
-
-class ForInBlock : ASTNode
-{
-    Name[] name_list;
-    Expression[] expression_list;
-    Block block;
-}
-
-class Label : ASTNode
-{
-    Name label;
-}
-
-class Goto : ASTNode
-{
-    Name label;
-}
-
-enum LastStatementKind
-{
-    Break,
-    Return,
-    Goto,
-}
-
-class LastStatement : ASTNode
-{
-    LastStatementKind kind;
-
-    union
+    this(CondBlock[] cond_blocks, Block else_block)
     {
-        Expression[] v_return;
-        Goto v_goto;
+        this.cond_blocks = cond_blocks;
+        this.else_block = else_block;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitIf(this);
     }
 }
 
-class Statement : ASTNode
+class For : Stat
 {
-    StatementKind kind;
+    string var;
+    Expr start;
+    Expr end;
+    Expr step;
+    Block block;
 
-    union
+    this(string var, Expr start, Expr end, Expr step, Block block)
     {
-        Label v_label;
-        FunctionCall v_function_call;
-        Assignment v_assignment;
-        DoBlock v_do_block;
-        WhileBlock v_while_block;
-        RepeatBlock v_repeat_block;
-        IfBlock v_if_block;
-        ForBlock v_for_block;
-        ForInBlock v_for_in_block;
+        this.var = var;
+        this.start = start;
+        this.end = end;
+        this.step = step;
+        this.block = block;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFor(this);
     }
 }
 
-class Block : ASTNode
+class ForIn : Stat
 {
-    Statement[] statements;
-    LastStatement last_statement;
+    string[] names;
+    Expr[] iterators;
+    Block block;
+
+    this(string[] names, Expr[] iterators, Block block)
+    {
+        this.names = names;
+        this.iterators = iterators;
+        this.block = block;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitForIn(this);
+    }
+}
+
+class FunctionDef : Stat
+{
+    string[] names;
+    string method_name;
+    FunctionThunk thunk;
+
+    this(string[] names, string method_name, FunctionThunk thunk)
+    {
+        this.names = names;
+        this.method_name = method_name;
+        this.thunk = thunk;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionDef(this);
+    }
+}
+
+class LocalFunction : Stat
+{
+    string name;
+    FunctionThunk thunk;
+
+    this(string name, FunctionThunk thunk)
+    {
+        this.name = name;
+        this.thunk = thunk;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitLocalFunction(this);
+    }
+}
+
+class LocalVars : Stat
+{
+    string[] names;
+    Expr[] values;
+
+    this(string[] names, Expr[] values)
+    {
+        this.names = names;
+        this.values = values;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitLocalVars(this);
+    }
+}
+
+class Return : Stat
+{
+    Expr[] values;
+
+    this(Expr[] values = null)
+    {
+        this.values = values;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitReturn(this);
+    }
+}
+
+class Goto : Stat
+{
+    string label;
+
+    this(string label)
+    {
+        this.label = label;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitGoto(this);
+    }
+}
+
+class Label : Stat
+{
+    string name;
+
+    this(string name)
+    {
+        this.name = name;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitLabel(this);
+    }
+}
+
+class Break : Stat
+{
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitBreak(this);
+    }
+}
+
+class Nil : Expr
+{
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitNil(this);
+    }
+}
+
+class Boolean : Expr
+{
+    bool value;
+
+    this(bool value)
+    {
+        this.value = value;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitBoolean(this);
+    }
+}
+
+class Number : Expr
+{
+    real value;
+
+    this(real value)
+    {
+        this.value = value;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitNumber(this);
+    }
+}
+
+class String : Expr
+{
+    string value;
+
+    this(string value)
+    {
+        this.value = value;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitString(this);
+    }
+}
+
+class Varargs : Expr
+{
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitVarargs(this);
+    }
+}
+
+class FunctionThunk : Expr
+{
+    string[] params;
+    bool has_varargs;
+    Block def_body;
+
+    this(string[] params, bool has_varargs = false, Block def_body)
+    {
+        this.params = params;
+        this.has_varargs = has_varargs;
+        this.def_body = def_body;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionThunk(this);
+    }
+}
+
+class Binary : Expr
+{
+    enum BinaryOp
+    {
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Pow,
+        Mod,
+        Cat,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        Eq,
+        Ne,
+        And,
+        Or,
+    }
+
+    BinaryOp op;
+    Expr left;
+    Expr right;
+
+    this(BinaryOp op, Expr left, Expr right)
+    {
+        this.op = op;
+        this.left = left;
+        this.right = right;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitBinary(this);
+    }
+}
+
+class Unary : Expr
+{
+    enum UnaryOp
+    {
+        Neg,
+        Not,
+        Len,
+    }
+
+    UnaryOp op;
+    Expr expr;
+
+    this(UnaryOp op, Expr expr)
+    {
+        this.op = op;
+        this.expr = expr;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitUnary(this);
+    }
+}
+
+class Name : Expr
+{
+    string name;
+
+    this(string name)
+    {
+        this.name = name;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitName(this);
+    }
+}
+
+class Index : Expr
+{
+    Expr table;
+    Expr key;
+
+    this(Expr table, Expr key)
+    {
+        this.table = table;
+        this.key = key;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitIndex(this);
+    }
+}
+
+class Field : Expr
+{
+    Expr table;
+    string key;
+
+    this(Expr table, string key)
+    {
+        this.table = table;
+        this.key = key;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitField(this);
+    }
+}
+
+class FunctionCallExpr : Expr
+{
+    Expr func;
+    Args args;
+
+    this(Expr func, Args args)
+    {
+        this.func = func;
+        this.args = args;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionCallExpr(this);
+    }
+}
+
+class MethodCall : Expr
+{
+    Expr target;
+    string method;
+    Args args;
+
+    this(Expr target, string method, Args args)
+    {
+        this.target = target;
+        this.method = method;
+        this.args = args;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitMethodCall(this);
+    }
+}
+
+struct Args
+{
+    Expr[] exprs;
+    Table table;
+    String str;
+
+    this(Expr[] exprs)
+    {
+        this.exprs = exprs;
+    }
+
+    this(Table table)
+    {
+        this.table = table;
+    }
+
+    this(String str)
+    {
+        this.str = str;
+    }
+}
+
+class Table : Expr
+{
+    struct Field
+    {
+        Expr key;
+        string name;
+        Expr value;
+    }
+
+    Field[] fields;
+
+    this(Field[] fields)
+    {
+        this.fields = fields;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitTable(this);
+    }
 }
