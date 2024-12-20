@@ -38,7 +38,7 @@ enum TokenKind
     OpUnequal,
     OpAnd,
     OpOr,
-    OpConcatentation,
+    OpConcat,
     OpLength,
     OpNot,
     DelimLBrack,
@@ -94,14 +94,15 @@ class Scanner
     size_t line_no = 1;
     size_t column_no = 0;
 
-    this(File source_file)
-    {
-        this.source = source_file.read();
-    }
-
     this(string source)
     {
         this.source = source;
+    }
+
+    static Scanner fromFile(string path)
+    {
+        string source = readText(path);
+        return new Scanner(source);
     }
 
     Position getCurrentPosition() const
@@ -206,7 +207,7 @@ class Scanner
 
     Token scanIdentifier()
     {
-        auto start_position = getCurrentPosition();
+        auto current_position = getCurrentPosition();
         string lexeme = "";
 
         while (!isAtSourceEnd() && isIdentifierTail(peekChar()))
@@ -272,7 +273,7 @@ class Scanner
         if (isRealMiddle(currentChar()))
             lexeme ~= nextChar();
 
-        if (lexeme[$ - 1].lower() == 'e' && isExponentSign(currentChar()))
+        if (std.ascii.toLower(lexeme[$ - 1]) == 'e' && isExponentSign(currentChar()))
             lexeme ~= nextChar();
 
         if (lexeme.indexOf('.') != -1 || lexeme.indexOf('e') != -1 || lexeme.indexOf('E') != -1)
@@ -295,17 +296,17 @@ class Scanner
         case "0X":
             while (!isAtSourceEnd() && isHexDigit(peekChar()))
                 lexeme ~= nextChar();
-            return Token(lexeme, ConstHexInteger, current_position);
+            return Token(lexeme, TokenKind.ConstHexInteger, current_position);
         case "0o":
         case "0O":
-            while (!isAtSourceEnd() && isOctDigit(peekChar()))
+            while (!isAtSourceEnd() && isOctalDigit(peekChar()))
                 lexeme ~= nextChar();
-            return Token(lexeme, ConstOctInteger, current_position);
+            return Token(lexeme, TokenKind.ConstOctInteger, current_position);
         case "0b":
         case "0B":
             while (!isAtSourceEnd() && "01".indexOf(peekChar()) != -1)
                 lexeme ~= nextChar();
-            return Token(lexeme, ConstBinInteger, current_position);
+            return Token(lexeme, TokenKind.ConstBinInteger, current_position);
         default:
             throw new ScannerError("Unterminated non-decimal integer symbol", getCurrentPosition());
         }
@@ -414,7 +415,7 @@ class Scanner
         case ".":
             return Token(lexeme, TokenKind.PunctDot, current_position);
         case "..":
-            return Token(lexeme, TokenKind.OpConcatenation, current_position);
+            return Token(lexeme, TokenKind.OpConcat, current_position);
         case "...":
             return Token(lexeme, TokenKind.PunctEllipses, current_position);
         default:
@@ -454,5 +455,14 @@ class Scanner
                 tokens ~= scanString();
 
         }
+
+        return tokens;
     }
+}
+
+unittest
+{
+    Scanner scanner = new Scanner("1 + 2;");
+    Token[] tokens = scanner.scanSource();
+    assert(tokens[0].kind == TokenKind.ConstInteger);
 }
