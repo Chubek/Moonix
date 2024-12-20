@@ -41,6 +41,7 @@ enum TokenKind
     OpConcat,
     OpLength,
     OpNot,
+    OpAssign,
     DelimLBrack,
     DelimRBrack,
     DelimLCurly,
@@ -52,7 +53,6 @@ enum TokenKind
     PunctColon,
     PunctColonColon,
     PunctSemicolon,
-    PunctEqual,
     PunctEllipses,
     ConstInteger,
     ConstHexInteger,
@@ -350,6 +350,8 @@ class Scanner
             return Token(lexeme, TokenKind.OpModulo, current_position);
         case "~=":
             return Token(lexeme, TokenKind.OpUnequal, current_position);
+        case "=":
+            return Token(lexeme, TokenKind.OpAssign, current_position);
         case "==":
             return Token(lexeme, TokenKind.OpEqual, current_position);
         case ">":
