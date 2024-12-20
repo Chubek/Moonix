@@ -91,12 +91,14 @@ class ScannerError : Exception
 class Scanner
 {
     string source;
-    size_t line_no = 1;
-    size_t column_no = 0;
+    size_t line_no;
+    size_t column_no;
 
     this(string source)
     {
         this.source = source;
+        this.line_no = 1;
+        this.column_no = 0;
     }
 
     static Scanner fromFile(string path)
@@ -110,26 +112,21 @@ class Scanner
         return Position(this.line_no, this.column_no);
     }
 
-    bool isAtSourceEnd() const
+    bool columnsLeft() const
     {
-        return (this.line_no * this.column_no) >= this.source.length;
+        return (this.line_no * this.column_no) < this.source.length;
     }
 
     void skipNewline()
     {
-        while (!isAtSourceEnd() && (currentChar() == '\n' || currentChar() == '\r'))
-            this.line_no++;
+        while (columnsLeft() && (peekChar() == '\n' || peekChar() == '\r'))
+            skipChar();
     }
 
     void skipWhitespace()
     {
-        while (!isAtSourceEnd() && isWhite(currentChar()))
-            this.column_no++;
-    }
-
-    char currentChar() const
-    {
-        return this.source[(this.line_no * this.column_no) - 1];
+        while (columnsLeft() && isWhite(peekChar()))
+            skipChar();
     }
 
     char peekChar() const
@@ -147,7 +144,7 @@ class Scanner
 
     char nextChar()
     {
-        return this.source[this.line_no * ++this.column_no];
+        return this.source[this.line_no * this.column_no++];
     }
 
     void skipChar()
@@ -210,7 +207,7 @@ class Scanner
         auto current_position = getCurrentPosition();
         string lexeme = "";
 
-        while (!isAtSourceEnd() && isIdentifierTail(peekChar()))
+        while (columnsLeft() && isIdentifierTail(peekChar()))
             lexeme ~= nextChar();
 
         switch (lexeme)
@@ -267,13 +264,13 @@ class Scanner
         auto current_position = getCurrentPosition();
         string lexeme = "";
 
-        while (!isAtSourceEnd() && isDigit(peekChar()))
+        while (columnsLeft() && isDigit(peekChar()))
             lexeme ~= nextChar();
 
-        if (isRealMiddle(currentChar()))
+        if (isRealMiddle(peekChar()))
             lexeme ~= nextChar();
 
-        if (std.ascii.toLower(lexeme[$ - 1]) == 'e' && isExponentSign(currentChar()))
+        if (std.ascii.toLower(lexeme[$ - 1]) == 'e' && isExponentSign(peekChar()))
             lexeme ~= nextChar();
 
         if (lexeme.indexOf('.') != -1 || lexeme.indexOf('e') != -1 || lexeme.indexOf('E') != -1)
@@ -287,24 +284,24 @@ class Scanner
         auto current_position = getCurrentPosition();
         string lexeme = "";
 
-        while (!isAtSourceEnd() && isNonDecimalIntegerHead(peekChar()))
+        while (columnsLeft() && isNonDecimalIntegerHead(peekChar()))
             lexeme ~= nextChar();
 
         switch (lexeme)
         {
         case "0x":
         case "0X":
-            while (!isAtSourceEnd() && isHexDigit(peekChar()))
+            while (columnsLeft() && isHexDigit(peekChar()))
                 lexeme ~= nextChar();
             return Token(lexeme, TokenKind.ConstHexInteger, current_position);
         case "0o":
         case "0O":
-            while (!isAtSourceEnd() && isOctalDigit(peekChar()))
+            while (columnsLeft() && isOctalDigit(peekChar()))
                 lexeme ~= nextChar();
             return Token(lexeme, TokenKind.ConstOctInteger, current_position);
         case "0b":
         case "0B":
-            while (!isAtSourceEnd() && "01".indexOf(peekChar()) != -1)
+            while (columnsLeft() && "01".indexOf(peekChar()) != -1)
                 lexeme ~= nextChar();
             return Token(lexeme, TokenKind.ConstBinInteger, current_position);
         default:
@@ -318,10 +315,10 @@ class Scanner
         string lexeme = "";
         char delim;
 
-        if (!isAtSourceEnd() && isStringDelim(peekChar()))
+        if (columnsLeft() && isStringDelim(peekChar()))
             delim = nextChar();
 
-        while (!isAtSourceEnd() && peekChar() != delim)
+        while (columnsLeft() && peekChar() != delim)
             lexeme ~= nextChar();
 
         skipChar();
@@ -334,7 +331,7 @@ class Scanner
         auto current_position = getCurrentPosition();
         string lexeme = "";
 
-        while (!isAtSourceEnd() && isOperator(peekChar()))
+        while (columnsLeft() && isOperator(peekChar()))
             lexeme ~= nextChar();
 
         switch (lexeme)
@@ -399,7 +396,7 @@ class Scanner
         auto current_position = getCurrentPosition();
         string lexeme = "";
 
-        while (!isAtSourceEnd() && isPunct(peekChar()))
+        while (columnsLeft() && isPunct(peekChar()))
             lexeme ~= nextChar();
 
         switch (lexeme)
@@ -432,7 +429,7 @@ class Scanner
             skipWhitespace();
             skipNewline();
 
-            if (isAtSourceEnd())
+            if (!columnsLeft())
                 break;
 
             if (isIdentifierHead(peekChar()))
@@ -462,7 +459,7 @@ class Scanner
 
 unittest
 {
-    Scanner scanner = new Scanner("1 + 2;");
+    Scanner scanner = new Scanner("1 + 1;");
     Token[] tokens = scanner.scanSource();
     assert(tokens[0].kind == TokenKind.ConstInteger);
 }
