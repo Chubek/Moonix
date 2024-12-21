@@ -483,6 +483,7 @@ class Unary : Expr
         Neg,
         Not,
         Len,
+	None,
     }
 
     UnaryOp op;
