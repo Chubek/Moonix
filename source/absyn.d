@@ -15,6 +15,10 @@ interface Stat : Node
 {
 }
 
+interface Factor : Expr
+{
+}
+
 template NodeVisitor(R)
 {
     interface NodeVisitor
@@ -36,15 +40,17 @@ template NodeVisitor(R)
         R visitGoto(Goto stat);
         R visitLabel(Label stat);
 
-        R visitNil(Nil expr);
-        R visitBoolean(Boolean expr);
-        R visitNumber(Number expr);
-        R visitString(String expr);
-        R visitVarargs(Varargs expr);
+        R visitNil(Nil factor);
+        R visitBoolean(Boolean factor);
+        R visitNumber(Number factor);
+        R visitString(String factor);
+        R visitVarargs(Varargs factor);
+        R visitName(Name factor);
+	R visitNestedExpr(NestedExpr factor);
+
         R visitFunctionThunk(FunctionThunk expr);
         R visitBinary(Binary expr);
         R visitUnary(Unary expr);
-        R visitName(Name expr);
         R visitIndex(Index expr);
         R visitField(Field expr);
         R visitMethodCall(MethodCall expr);
@@ -322,7 +328,7 @@ class Break : Stat
     }
 }
 
-class Nil : Expr
+class Nil : Factor
 {
     override T accept(T)(NodeVisitor!T visitor)
     {
@@ -330,7 +336,7 @@ class Nil : Expr
     }
 }
 
-class Boolean : Expr
+class Boolean : Factor
 {
     bool value;
 
@@ -345,7 +351,7 @@ class Boolean : Expr
     }
 }
 
-class Number : Expr
+class Number : Factor
 {
     real value;
 
@@ -360,7 +366,7 @@ class Number : Expr
     }
 }
 
-class String : Expr
+class String : Factor
 {
     string value;
 
@@ -375,11 +381,41 @@ class String : Expr
     }
 }
 
-class Varargs : Expr
+class Name : Factor
+{
+    string name;
+
+    this(string name)
+    {
+        this.name = name;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitName(this);
+    }
+}
+
+class Varargs : Factor
 {
     override T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitVarargs(this);
+    }
+}
+
+class NestedExpr : Factor
+{
+    Expr expr;
+
+    this(Expr expr)
+    {
+        this.expr = expr;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitNestedExpr(this);
     }
 }
 
@@ -461,21 +497,6 @@ class Unary : Expr
     override T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitUnary(this);
-    }
-}
-
-class Name : Expr
-{
-    string name;
-
-    this(string name)
-    {
-        this.name = name;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitName(this);
     }
 }
 
