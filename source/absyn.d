@@ -78,7 +78,7 @@ class Block : Stat
 
 class Assign : Stat
 {
-    Expr[] vars;
+    Name[] vars;
     Expr[] values;
 
     this(Expr[] vars, Expr[] values)
@@ -260,7 +260,7 @@ class LocalFunction : Stat
 
 class LocalVars : Stat
 {
-    string[] names;
+    Name[] names;
     Expr[] values;
 
     this(string[] names, Expr[] values)
