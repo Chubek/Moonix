@@ -81,7 +81,7 @@ class Assign : Stat
     Name[] vars;
     Expr[] values;
 
-    this(Expr[] vars, Expr[] values)
+    this(Name[] vars, Expr[] values)
     {
         this.vars = vars;
         this.values = values;
@@ -182,13 +182,13 @@ class If : Stat
 
 class For : Stat
 {
-    string var;
+    Name var;
     Expr start;
     Expr end;
     Expr step;
     Block block;
 
-    this(string var, Expr start, Expr end, Expr step, Block block)
+    this(Name var, Expr start, Expr end, Expr step, Block block)
     {
         this.var = var;
         this.start = start;
@@ -205,7 +205,7 @@ class For : Stat
 
 class ForIn : Stat
 {
-    string[] names;
+    Name[] names;
     Expr[] iterators;
     Block block;
 
@@ -224,11 +224,11 @@ class ForIn : Stat
 
 class FunctionDef : Stat
 {
-    string[] names;
-    string method_name;
+    Name[] names;
+    Name method_name;
     FunctionThunk thunk;
 
-    this(string[] names, string method_name, FunctionThunk thunk)
+    this(Name[] names, Name method_name, FunctionThunk thunk)
     {
         this.names = names;
         this.method_name = method_name;
@@ -243,10 +243,10 @@ class FunctionDef : Stat
 
 class LocalFunction : Stat
 {
-    string name;
+    Name name;
     FunctionThunk thunk;
 
-    this(string name, FunctionThunk thunk)
+    this(Name name, FunctionThunk thunk)
     {
         this.name = name;
         this.thunk = thunk;
@@ -263,7 +263,7 @@ class LocalVars : Stat
     Name[] names;
     Expr[] values;
 
-    this(string[] names, Expr[] values)
+    this(Name[] names, Expr[] values)
     {
         this.names = names;
         this.values = values;
@@ -294,7 +294,7 @@ class Goto : Stat
 {
     Name label;
 
-    this(string label)
+    this(Name label)
     {
         this.label = label;
     }
@@ -309,7 +309,7 @@ class Label : Stat
 {
     Name name;
 
-    this(string name)
+    this(Name name)
     {
         this.name = name;
     }
@@ -425,7 +425,7 @@ class FunctionThunk : Expr
     bool has_varargs;
     Block def_body;
 
-    this(string[] params, bool has_varargs = false, Block def_body)
+    this(Name[] params, bool has_varargs = false, Block def_body)
     {
         this.params = params;
         this.has_varargs = has_varargs;
@@ -522,7 +522,7 @@ class Field : Expr
     Expr table;
     Name key;
 
-    this(Expr table, string key)
+    this(Expr table, Name key)
     {
         this.table = table;
         this.key = key;
@@ -557,7 +557,7 @@ class MethodCall : Expr
     Name method;
     Args args;
 
-    this(Expr target, string method, Args args)
+    this(Expr target, Name method, Args args)
     {
         this.target = target;
         this.method = method;
