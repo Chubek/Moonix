@@ -46,7 +46,7 @@ template NodeVisitor(R)
         R visitString(String factor);
         R visitVarargs(Varargs factor);
         R visitName(Name factor);
-	R visitNestedExpr(NestedExpr factor);
+        R visitNestedExpr(NestedExpr factor);
 
         R visitFunctionThunk(FunctionThunk expr);
         R visitBinary(Binary expr);
@@ -292,7 +292,7 @@ class Return : Stat
 
 class Goto : Stat
 {
-    string label;
+    Name label;
 
     this(string label)
     {
@@ -307,7 +307,7 @@ class Goto : Stat
 
 class Label : Stat
 {
-    string name;
+    Name name;
 
     this(string name)
     {
@@ -421,7 +421,7 @@ class NestedExpr : Factor
 
 class FunctionThunk : Expr
 {
-    string[] params;
+    Name[] params;
     bool has_varargs;
     Block def_body;
 
@@ -520,7 +520,7 @@ class Index : Expr
 class Field : Expr
 {
     Expr table;
-    string key;
+    Name key;
 
     this(Expr table, string key)
     {
@@ -554,7 +554,7 @@ class FunctionCallExpr : Expr
 class MethodCall : Expr
 {
     Expr target;
-    string method;
+    Name method;
     Args args;
 
     this(Expr target, string method, Args args)
@@ -597,7 +597,7 @@ class Table : Expr
     struct Field
     {
         Expr key;
-        string name;
+        Name name;
         Expr value;
     }
 
