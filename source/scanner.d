@@ -54,12 +54,8 @@ enum TokenKind
     PunctColonColon,
     PunctSemicolon,
     PunctEllipses,
-    ConstInteger,
-    ConstHexInteger,
-    ConstOctInteger,
-    ConstBinInteger,
-    ConstReal,
     ConstString,
+    ConstNumber,
     ConstName,
     Newline,
 }
@@ -276,9 +272,9 @@ class Scanner
             lexeme ~= nextChar();
 
         if (lexeme.indexOf('.') != -1 || lexeme.indexOf('e') != -1 || lexeme.indexOf('E') != -1)
-            return Token(lexeme, TokenKind.ConstReal, current_position);
+            return Token(lexeme, TokenKind.ConstNumber, current_position);
         else
-            return Token(lexeme, TokenKind.ConstInteger, current_position);
+            return Token(lexeme, TokenKind.ConstNumber, current_position);
     }
 
     Token scanNonDecimalInteger()
@@ -295,17 +291,17 @@ class Scanner
         case "0X":
             while (columnsLeft() && isHexDigit(peekChar()))
                 lexeme ~= nextChar();
-            return Token(lexeme, TokenKind.ConstHexInteger, current_position);
+            return Token(lexeme, TokenKind.ConstNumber, current_position);
         case "0o":
         case "0O":
             while (columnsLeft() && isOctalDigit(peekChar()))
                 lexeme ~= nextChar();
-            return Token(lexeme, TokenKind.ConstOctInteger, current_position);
+            return Token(lexeme, TokenKind.ConstNumber, current_position);
         case "0b":
         case "0B":
             while (columnsLeft() && "01".indexOf(peekChar()) != -1)
                 lexeme ~= nextChar();
-            return Token(lexeme, TokenKind.ConstBinInteger, current_position);
+            return Token(lexeme, TokenKind.ConstNumber, current_position);
         default:
             throw new ScannerError("Unterminated non-decimal integer symbol", getCurrentPosition());
         }
@@ -477,5 +473,5 @@ unittest
 {
     Scanner scanner = new Scanner("1 + 1;");
     Token[] tokens = scanner.scanSource();
-    assert(tokens[0].kind == TokenKind.ConstInteger);
+    assert(tokens[0].kind == TokenKind.ConstNumber);
 }
