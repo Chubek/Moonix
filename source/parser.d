@@ -627,8 +627,183 @@ class Parser
         return local_vars;
     }
 
+    Nullable!Return parseReturn()
+    {
+        Nullable!Return return_stat;
+        Expr[] values;
+
+        consumeToken(TokenKind.KwReturn);
+
+        while (true)
+        {
+            if (!tokensLeft())
+            {
+                return_stat = new Return(values);
+                return return_stat;
+            }
+
+            auto expr = parseExpression();
+
+            if (expr.isNull)
+            {
+                return_stat = new Return(values);
+                return return_stat;
+            }
+
+            values ~= expr.get;
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        return_stat = new Return(values);
+        return return_stat;
+    }
+
+    Nullable!Label parseLabel()
+    {
+        Nullable!Label label;
+
+        consumeToken(TokenKind.PunctColonColon);
+
+        auto name_token = consumeToken(TokenKind.ConstName);
+        auto name_ast = new Name(name_token.lexeme);
+
+        label = new Label(name_ast);
+        return label;
+    }
+
+    Nullable!Goto parseGoto()
+    {
+        Nullable!Goto goto_stat;
+
+        consumeToken(TokenKind.KwGoto);
+
+        auto name_token = consumeToken(TokenKind.ConstName);
+        auto name_ast = new Name(name_token.lexeme);
+
+        goto_stat = new Goto(name_ast);
+        return goto_stat;
+    }
+
+    Nullable!Break parseBreak()
+    {
+        Nullable!Break break_stat;
+
+        consumeToken(TokenKind.KwBreak);
+
+        break_stat = new Break();
+        return break_stat;
+    }
+
     Nullable!Block parseBlock()
     {
+        Nullable!Block block;
+        Stat[] statements = null;
+        Stat retstat = null;
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return block;
+
+            if (matchToken(TokenKind.KwFor))
+            {
+                auto for_block = parseFor();
+
+                if (for_block.isNull)
+                {
+                    auto for_in_block = parseForIn();
+
+                    if (for_in_block.isNull)
+                        throw new ParserError("Expected for or for...in block", null);
+
+                    statements ~= for_in_block.get;
+
+                }
+                else
+                    statements ~= for_block.get;
+            }
+            else if (matchToken(TokenKind.KwWhile))
+            {
+                auto while_block = parseWhile();
+
+                if (while_block.isNull)
+                    throw new ParserError("Expected while block", null);
+
+                statements ~= while_block.get;
+            }
+            else if (matchToken(TokenKind.KwIf))
+            {
+                auto if_block = parseIf();
+
+                if (if_block.isNull)
+                    throw new ParserError("Expected if block", null);
+
+                statements ~= if_block.get;
+            }
+            else if (matchToken(TokenKind.KwRepeat))
+            {
+                auto repeat_block = parseRepeat();
+
+                if (repeat_block.isNull)
+                    throw new ParserError("Expected repeat block", null);
+
+                statements ~= repeat_block.get;
+            }
+            else if (matchToken(TokenKind.KwFunction))
+            {
+                auto function_def = parseFunctionDef();
+
+                if (function_def.isNull)
+                    throw new ParserError("Expected function definition", null);
+
+                statements ~= function_def.get;
+            }
+            else if (matchToken(TokenKind.KwLocal))
+            {
+                auto local_function = parseLocalFunction();
+
+                if (local_function.isNull)
+                {
+                    auto local_vars = parseLocalVars();
+
+                    if (local_vars.isNull)
+                        throw new ParserError("Expected local function or variables", null);
+
+                    statements ~= local_vars.get;
+                }
+                else
+                    statements ~= local_function.get;
+
+            }
+            else if (matchToken(TokenKind.PunctColonColon))
+            {
+                auto label_stat = parseLabel();
+
+                if (label_stat.isNull)
+                    throw new ParserError("Improper label", null);
+
+                statements ~= label_stat.get;
+            }
+
+            if (!consumeTokenOpt(TokenKind.Newline) || !consumeTokenOpt(TokenKind.PunctSemicolon))
+                throw new ParserError("Expected NEWLINE or SEMICOLON at the end of statement", null);
+
+            if (matchToken(TokenKind.KwBreak) || matchToken(TokenKind.KwGoto)
+                    || matchToken(TokenKind.KwReturn) || matchToken(TokenKind.KwEnd))
+                break;
+        }
+
+        if (matchToken(TokenKind.KwBreak))
+            laststat = parseBreak().get;
+        else if (matchToken(TokenKind.KwReturn))
+            laststat = parseReturn().get;
+        else if (matchToken(TokenKind.KwGoto))
+            laststat = parseGoto().get;
+
+        block = new Block(statements, laststat);
+        return block;
 
     }
 
