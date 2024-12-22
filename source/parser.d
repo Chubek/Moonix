@@ -83,6 +83,11 @@ class Parser
         return false;
     }
 
+    void ungetToken()
+    {
+        this.cursor--;
+    }
+
     Nullable!Factor parseFactor()
     {
         Nullable!Factor factor;
@@ -120,12 +125,577 @@ class Parser
         else if (matchToken(TokenKind.DelimLParen))
         {
             consumeToken(TokenKind.DelimLParen);
-            auto nested_expr = parseExpr();
+            auto expression = parseExpression();
+
+            if (expression.isNull)
+                throw new ParserError("Expected nested expression after LPAREN", null);
+
             consumeToken(TokenKind.DelimRParen);
-            factor = new NestedExpr(nested_expr);
+            factor = new NestedExpr(expression.get);
+        }
+        else if (matchToken(TokenKind.DelimLCurly))
+        {
+            consumeToken(TokenKind.DelimLCurly);
+            auto table = parseTable();
+
+            if (table.isNull)
+                throw new ParserError("Expected table constructor after LCURLY", null);
+
+            consumeToken(TokenKind.DelimRCurly);
+            factor = table.get;
         }
 
         return factor;
+    }
+
+    Nullable!Table parseTable()
+    {
+        Nullable!Table table;
+        Table.Field[] fields = null;
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return table;
+
+            if (consumeTokenOpt(TokenKind.DelimLBrack))
+            {
+                auto key = parseExpression();
+                consumeToken(TokenKind.DelimRBrack);
+                consumeToken(TokenKind.OpAssign);
+                auto value = parseExpression();
+                fields ~= Table.Field(key, value);
+
+            }
+            else if (matchToken(TokenKind.ConstName))
+            {
+                auto name_token = consumeToken(TokenKind.ConstName);
+                auto name_ast = new Name(name_token.lexeme);
+
+                if (!consumeTokenOpt(TokenKind.OpAssign))
+                {
+                    fields ~= Table.Field(name_ast);
+                }
+                else
+                {
+                    auto value = parseExpression();
+                    fields ~= Table.Field(name_ast, value);
+                }
+            }
+            else
+            {
+                auto value = parseExpression();
+                fields ~= Table.Field(value);
+            }
+
+            if (!(consumeTokenOpt(TokenKind.PunctSemicolon)
+                    || consumeTokenOpt(TokenKind.PunctComma)))
+            {
+                table = new Table(fields);
+                return table;
+            }
+
+        }
+
+        return table;
+    }
+
+    Nullable!Args parseArguments()
+    {
+        Nullable!Args arguments;
+
+        if (matchToken(TokenKind.ConstString))
+        {
+            auto string_token = consumeToken(TokenKind.ConstString);
+            arguments = Args(string_token);
+            return arguments;
+        }
+        else if (matchToken(TokenKind.DelimLCurly))
+        {
+            consumeToken(TokenKind.DelimLCurly);
+            auto table = parseTable();
+            consumeToken(TokenKind.DelimRCurly);
+            arguments = Args(table);
+            return arguments;
+        }
+        else
+        {
+            Expr[] exprs = null;
+
+            while (true)
+            {
+                auto expr = parseExpression();
+
+                if (expr.isNull)
+                    break;
+
+                exprs ~= expr.get;
+                if (!consumeTokenOpt(TokenKind.PunctComma))
+                    break;
+            }
+
+            arguments = Args(exprs);
+            return argument;
+        }
+    }
+
+    Nullable!FunctionThunk parseFunctionThunk()
+    {
+        Nullable!FunctionThunk function_thunk;
+        Name[] params = null;
+        bool has_varargs = false;
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return function_thunk;
+
+            if (matchToken(TokenKind.ConstName))
+            {
+                auto name_token = consumeToken(TokenKind.ConstName);
+                auto name_ast = new Name(name_token.lexeme);
+                params ~= name_ast;
+            }
+            else if (consumeTokenOpt(TokenKind.PunctEllipses))
+            {
+                if (has_varargs)
+                    throw new ParserError("There can only be one varargs notation", null);
+                else
+                    has_varargs = true;
+            }
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        auto function_body = parseBlock();
+        function_thunk = new FunctionThunk(params, has_varargs, function_body);
+        return function_thunk;
+    }
+
+    Nullable!FunctionCallStat parseFunctionCallStat()
+    {
+        Nullable!FunctionCallStat function_call_stat;
+
+        auto prefix_expr = parsePrefixExpr();
+
+        if (prefix_expr.isNull)
+            return function_call_stat;
+
+        if (prefix_expr.get is FunctionCallExpr)
+            function_call_stat = new FunctionCallStat(prefix_expr.get);
+
+        return function_call_stat;
+    }
+
+    Nullable!Do parseDo()
+    {
+        Nullable!Do do_block;
+
+        consumeToken(TokenKind.KwDo);
+        auto block = parseBlock();
+        consumeToken(TokenKind.KwEnd);
+
+        do_block = new Do(block);
+        return do_block;
+    }
+
+    Nullable!Assign parseAssign()
+    {
+        Nullable!Assign assign;
+        Expr[] vars = null;
+        Expr[] values = null;
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return assign;
+
+            auto prefix_expr = parsePrefixExpr();
+
+            if (prefix_expr.isNull && !vars)
+                return assign;
+            else if (prefix_expr.isNull)
+                throw new ParserError("Expected variable name", null);
+
+            vars ~= prefix_expr.get;
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        consumeToken(TokenKind.OpAssign);
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return assign;
+
+            auto expr = parseExpression();
+
+            if (expr.isNull)
+                throw new ParserError("Expected expression on RHS of assign", null);
+
+            values ~= expr.get;
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        assign = new Assign(vars, values);
+        return assign;
+    }
+
+    Nullable!While parseWhile()
+    {
+        Nullable!While while_block;
+
+        consumeToken(TokenKind.KwWhile);
+        auto condition = parseExpression();
+        consumeToken(TokenKind.KwDo);
+        auto block = parseBlock();
+        consumeToken(TokenKind.KwEnd);
+
+        while_block = new While(condition, block);
+        return while_block;
+    }
+
+    Nullable!Repeat parseRepeat()
+    {
+        Nullable!Repeat repeat_block;
+
+        consumeToken(TokenKind.KwRepeat);
+        auto block = parseBlock();
+        consumeToken(TokenKind.KwUntil);
+        auto condition = parseExpression();
+
+        repeat_block = new Repeat(block, condition);
+        return repeat_block;
+    }
+
+    Nullable!If parseIf()
+    {
+        Nullable!If if_block;
+        CondBlock main_block = null;
+        CondBlock[] alt_blocks = null;
+        Block else_block = null;
+
+        consumeToken(TokenKind.KwIf);
+
+        auto main_condition = parseExpression();
+        consumeToken(TokenKind.KwThen);
+        auto main_block = parseBlock();
+        main_block = If.CondBlock(main_condition, main_block);
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return if_block;
+
+            if (!consumeTokensOpt(TokenKind.KwElseif))
+                break;
+
+            auto alt_condition = parseExpression();
+            consumeToken(TokenKind.KwThen);
+            auto alt_block = parseBlock();
+
+            alt_blocks ~= If.CondBlock(alt_condition, alt_block);
+        }
+
+        if (consumeTokenOpt(TokenKind.KwElse))
+        {
+            else_block = parseBlock();
+        }
+
+        consumeToken(TokenKind.KwEnd);
+        if_block = new If(main_block, alt_blocks, else_block);
+        return if_block;
+    }
+
+    Nullable!For parseFor()
+    {
+        Nullable!For for_block;
+        Nullable!Expr opt_expr;
+        Name name = null;
+        Expr start = null;
+        Expr end = null;
+        Expr step = null;
+        Block block = null;
+
+        consumeToken(TokenKind.KwFor);
+
+        if (matchToken(TokenKind.ConstName))
+        {
+            auto name_token = consumeToken(TokenKind.ConstName);
+            name = new Name(name_token.lexeme);
+        }
+        else
+            throw new ParserError("Expected NAME", null);
+
+        if (matchToken(TokenKind.PunctComma) || matchToken(TokenKind.KwIn))
+        {
+            ungetToken();
+            ungetToken();
+            return for_block;
+        }
+
+        consumeToken(TokenKind.OpAssign);
+        opt_expr = parseExpression();
+
+        if (opt_expr.isNull)
+            throw new ParserError("Expected start expression", null);
+
+        start = opt_expr.get;
+
+        consumeToken(TokenKind.PunctComma);
+        opt_expr = parseExpression();
+
+        if (opt_expr.isNull)
+            throw new ParserError("Expected end expression", null);
+
+        end = opt_expr.get;
+
+        if (consumeTokenOpt(TokenKind.PunctComma))
+        {
+            opt_expr = parseExpression();
+
+            if (opt_expr.isNull)
+                throw new ParserError("Expected step expression after COMMA", null);
+
+            step = opt_expr.get;
+        }
+
+        consumeToken(TokenKind.KwDo);
+        block = parseBlock();
+        consumeToken(TokenKind.KwEnd);
+
+        for_block = new For(name, start, end, step, block);
+        return for_block;
+    }
+
+    Nullable!ForIn parseForIn()
+    {
+        Nullable!ForIn for_in_block;
+        Name[] names = null;
+        Expr[] exprs = null;
+        Block block = null;
+
+        consumeToken(TokenKind.KwFor);
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return for_in_block;
+
+            if (matchToken(TokenKind.ConstName))
+            {
+                auto name_token = consumeToken(TokenKind.ConstName);
+                auto name_ast = new Name(name_token.lexeme);
+                names ~= name_ast;
+            }
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        consumeToken(TokenKind.KwIn);
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return for_in_block;
+
+            auto expr_opt = parseExpression();
+
+            if (expr_opt.isNull)
+                throw new ParserError("Expected expression in for...in block", null);
+
+            exprs ~= expr_opt.get;
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        consumeToken(TokenKind.KwDo);
+        block = parseBlock();
+        consumeToken(Tokenkind.KwEnd);
+
+        for_in_block = new ForIn(names, exprs, block);
+        return for_in_block;
+    }
+
+    Nullable!FunctionDef parseFunctionDef()
+    {
+        Nullable!FunctionDef function_def;
+        FunctionName function_name;
+        FunctionThunk function_thunk;
+
+        consumeToken(TokenKind.KwFunction);
+        auto prefix_expr = parsePrefixExpr();
+
+        if (prefix_expr.isNull || prefix_expr.get !is FunctionName)
+            throw new ParserError("Expected function name", null);
+
+        function_name = prefix_expr.get;
+
+        auto function_thunk_opt = parseFunctionThunk();
+
+        if (function_thunk_opt.isNull)
+            throw new ParserError("Expected function body", null);
+
+        function_thunk = function_thunk_opt.get;
+        function_def = new FunctionDef(function_name, function_thunk);
+        return function_def;
+    }
+
+    Nullable!LocalFunction parseLocalFunction()
+    {
+        Nullable!LocalFunction local_function;
+        Name name = null;
+        FunctionThunk function_thunk = null;
+
+        consumeToken(TokenKind.KwLocal);
+
+        if (!consumeTokenOpt(TokenKind.KwFunction))
+        {
+            ungetToken();
+            return local_function;
+        }
+
+        if (!matchToken(TokenKind.ConstName))
+            throw new ParserError("Expected local function name", null);
+
+        auto name_token = consumeToken(TokenKind.ConstName);
+        name = new Name(name_token.lexeme);
+
+        auto function_thunk_opt = parseFunctionThunk();
+
+        if (function_thunk_opt.isNull)
+            throw new ParserError("Expected local function body", null);
+
+        function_thunk = function_thunk_opt.get;
+        local_function = new LocalFunction(name, function_thunk);
+        return local_function;
+    }
+
+    Nullable!LocalVars parseLocalVars()
+    {
+        Nullable!LocalVars local_vars;
+        Name[] names = null;
+        Expr[] values = null;
+
+        consumeToken(TokenKind.KwLocal);
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return local_vars;
+
+            if (matchToken(TokenKind.ConstName))
+            {
+                auto name_token = consumeToken(TokenKind.ConstName);
+                names ~= new Name(name_token.lexeme);
+            }
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        if (!consumeTokenOpt(TokenKind.OpAssign))
+        {
+            local_vars = new LocalVars(names, values);
+            return local_vars;
+        }
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return local_vars;
+
+            auto expr = parseExpression();
+
+            if (expr.isNull)
+                throw new ParserError("Expected expression after ASSIGN in local variables", null);
+
+            values ~= expr.get;
+
+            if (!consumeTokenOpt(TokenKind.PunctComma))
+                break;
+        }
+
+        local_vars = new LocalVars(names, values);
+        return local_vars;
+    }
+
+    Nullable!Block parseBlock()
+    {
+
+    }
+
+    Nullable!PrefixExpr parsePrefixExpr()
+    {
+        Nullable!PrefixExpr prefix_expr;
+        Expr[] exprs = null;
+
+        while (true)
+        {
+            if (!tokensLeft())
+                return prefix_expr;
+
+            auto factor = parseFactor();
+            exprs ~= factor;
+
+            if ((consumeTokenOpt(TokenKind.DelimLParen) || consumeTokenOpt(TokenKind.DelimLCurly)
+                    || consumeTokenOpt(TokenKind.ConstString)) && exprs)
+            {
+                auto arguments = parseArguments();
+                consumeToken(TokenKind.DelimRParen);
+                prefix_expr = new FunctionCallExpr(exprs, arguments);
+                return prefix_expr;
+            }
+            else if (consumeTokenOpt(TokenKind.PunctColon) && exprs)
+            {
+                auto name_token = consumeToken(TokenKind.ConstName);
+                auto name_ast = new Name(name_token.lexeme);
+
+                if (consumeTokenOpt(TokenKind.DelimLParen))
+                {
+                    auto arguments = parseArguments();
+                    consumeToken(TokenKind.DelimRParen);
+                    prefix_expr = new MethodCall(exprs, name_ast, arguments);
+                }
+                else
+                {
+                    prefix_expr = new FunctionName(exprs, name_ast);
+                    return prefix_expr;
+                }
+            }
+            else if (consumeTokenOpt(TokenKind.DelimLBrack) && exprs)
+            {
+                auto bracket_expr = parseExpression();
+
+                if (bracket_expr.isNull)
+                    throw new ParserError("Empty bracket expression", null);
+
+                consumeToken(TokenKind.DelimRBrack);
+                prefix_expr = new Index(exprs, bracket_expr);
+                return prefix_expr;
+            }
+            else if (consumeTokenOpt(TokenKind.PunctDot))
+                continue;
+            else
+            {
+                if (exprs[$ - 1] is Name)
+                {
+                    Name name_ast = exprs[$ - 1];
+                    exprs = exprs[0 .. $ - 1];
+                    prefix_expr = new Field(exprs, name_ast);
+                    return prefix_expr;
+                }
+                else
+                    throw new ParserError("Expected NAME", null);
+            }
+        }
     }
 
     Nullable!Unary parseUnary()
@@ -143,12 +713,12 @@ class Parser
         else
             op = Unary.UnaryOp.None;
 
-        auto factor = parseFactor();
+        auto prefix = parsePrefixExpr();
 
-        if (factor.isNull)
-            throw new ParserError("Expected expression factor", null);
+        if (prefix.isNull)
+            throw new ParserError("Expected prefix expression", null);
 
-        unary = new Unary(op, factor.get);
+        unary = new Unary(op, prefix.get);
         return unary;
     }
 
@@ -270,9 +840,9 @@ class Parser
         return conjunction;
     }
 
-    Nullable!Binary parseExpression()
+    Nullable!Binary parseDisjunction()
     {
-        Nullable!Binary expression;
+        Nullable!Binary disjunction;
 
         auto lhs = parseConjunction();
 
@@ -287,7 +857,13 @@ class Parser
         if (rhs.isNull)
             throw new ParserError("Expected RHS of disjunction", null);
 
-        expression = new Binary(Binary.BinaryOp.Or, lhs.get, rhs.get);
-        return expression;
+        disjunction = new Binary(Binary.BinaryOp.Or, lhs.get, rhs.get);
+        return disjunction;
     }
+
+    Nullable!Expr parseExpression()
+    {
+        return parseDisjunction();
+    }
+
 }
