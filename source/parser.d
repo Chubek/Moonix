@@ -704,9 +704,6 @@ class Parser
 
         while (true)
         {
-            if (!tokensLeft())
-                return block;
-
             if (matchToken(TokenKind.KwFor))
             {
                 auto for_block = parseFor();
@@ -786,12 +783,22 @@ class Parser
 
                 statements ~= label_stat.get;
             }
+            else if (matchToken(TokenKind.KwDo))
+            {
+                auto do_block = parseDo();
+
+                if (do_block.isNull)
+                    throw new ParserError("Expected do block", null);
+
+                statements ~= do_block.get;
+            }
 
             if (!consumeTokenOpt(TokenKind.Newline) || !consumeTokenOpt(TokenKind.PunctSemicolon))
                 throw new ParserError("Expected NEWLINE or SEMICOLON at the end of statement", null);
 
             if (matchToken(TokenKind.KwBreak) || matchToken(TokenKind.KwGoto)
-                    || matchToken(TokenKind.KwReturn) || matchToken(TokenKind.KwEnd))
+                    || matchToken(TokenKind.KwReturn)
+                    || matchToken(TokenKind.KwEnd) || !tokensLeft())
                 break;
         }
 
@@ -824,7 +831,10 @@ class Parser
                     || consumeTokenOpt(TokenKind.ConstString)) && exprs)
             {
                 auto arguments = parseArguments();
-                consumeToken(TokenKind.DelimRParen);
+
+                if (arguments.exprs && !consumeTokenOpt(TokenKind.DelimRParen))
+                    throw new ParserError("Unterminated argument list", null);
+
                 prefix_expr = new FunctionCallExpr(exprs, arguments);
                 return prefix_expr;
             }
@@ -1041,4 +1051,8 @@ class Parser
         return parseDisjunction();
     }
 
+    Nullable!Stat parseLua()
+    {
+        return parseBlock();
+    }
 }
