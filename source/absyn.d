@@ -19,6 +19,10 @@ interface Factor : Expr
 {
 }
 
+interface PrefixExpr : Factor
+{
+}
+
 template NodeVisitor(R)
 {
     interface NodeVisitor
@@ -46,16 +50,19 @@ template NodeVisitor(R)
         R visitString(String factor);
         R visitVarargs(Varargs factor);
         R visitName(Name factor);
+        R visitTable(Table factor);
         R visitNestedExpr(NestedExpr factor);
+
+        R visitIndex(Index prefix_expr);
+        R visitField(Field prefix_expr);
+        R visitMethodCall(MethodCall prefix_expr);
+        R visitFunctionCallExpr(FunctionCallExpr prefix_expr);
+        R visitFunctionName(FunctionName prefix_expr);
 
         R visitFunctionThunk(FunctionThunk expr);
         R visitBinary(Binary expr);
         R visitUnary(Unary expr);
-        R visitIndex(Index expr);
-        R visitField(Field expr);
-        R visitMethodCall(MethodCall expr);
-        R visitFunctionCallExpr(FunctionCallExpr expr);
-        R visitTable(Table expr);
+
     }
 }
 
@@ -78,10 +85,10 @@ class Block : Stat
 
 class Assign : Stat
 {
-    Name[] vars;
+    Expr[] vars;
     Expr[] values;
 
-    this(Name[] vars, Expr[] values)
+    this(Expr[] vars, Expr[] values)
     {
         this.vars = vars;
         this.values = values;
@@ -165,12 +172,14 @@ class If : Stat
         Block block;
     }
 
-    CondBlock[] cond_blocks;
+    CondBlock main_block;
+    CondBlock[] alt_blocks;
     Block else_block;
 
-    this(CondBlock[] cond_blocks, Block else_block)
+    this(CondBlock main_block, CondBlock[] alt_blocks, Block else_block)
     {
-        this.cond_blocks = cond_blocks;
+	this.main_block = main_block;
+        this.alt_blocks = alt_blocks;
         this.else_block = else_block;
     }
 
@@ -224,14 +233,12 @@ class ForIn : Stat
 
 class FunctionDef : Stat
 {
-    Name[] names;
-    Name method_name;
+    FunctionName name;
     FunctionThunk thunk;
 
-    this(Name[] names, Name method_name, FunctionThunk thunk)
+    this(FunctionName name, FunctionThunk thunk)
     {
-        this.names = names;
-        this.method_name = method_name;
+        this.name = name;
         this.thunk = thunk;
     }
 
@@ -419,6 +426,154 @@ class NestedExpr : Factor
     }
 }
 
+class Table : Factor
+{
+    struct Field
+    {
+        Expr key;
+        Name name;
+        Expr value;
+
+        this(Name name, Expr value)
+        {
+            this.name = name;
+            this.value = value;
+        }
+
+        this(Expr key, Expr value)
+        {
+            this.key = key;
+            this.value = value;
+        }
+
+        this(Expr value)
+        {
+            this.value = value;
+        }
+    }
+
+    Field[] fields;
+
+    this(Field[] fields)
+    {
+        this.fields = fields;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitTable(this);
+    }
+}
+
+class Index : PrefixExpr
+{
+    Expr[] table;
+    Expr key;
+
+    this(Expr[] table, Expr key)
+    {
+        this.table = table;
+        this.key = key;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitIndex(this);
+    }
+}
+
+class Field : PrefixExpr
+{
+    Expr[] table;
+    Name key;
+
+    this(Expr[] table, Name key)
+    {
+        this.table = table;
+        this.key = key;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitField(this);
+    }
+}
+
+class FunctionCallExpr : PrefixExpr
+{
+    Expr[] func;
+    Args args;
+
+    this(Expr[] func, Args args)
+    {
+        this.func = func;
+        this.args = args;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionCallExpr(this);
+    }
+}
+
+class MethodCall : PrefixExpr
+{
+    Expr target;
+    Name method;
+    Args args;
+
+    this(Expr target, Name method, Args args)
+    {
+        this.target = target;
+        this.method = method;
+        this.args = args;
+    }
+
+    override T accept(T)(NodeVisitor!T visitor)
+    {
+        return visitor.visitMethodCall(this);
+    }
+}
+
+struct Args
+{
+    Expr[] exprs;
+    Table table;
+    String str;
+
+    this(Expr[] exprs)
+    {
+        this.exprs = exprs;
+    }
+
+    this(Table table)
+    {
+        this.table = table;
+    }
+
+    this(String str)
+    {
+        this.str = str;
+    }
+}
+
+class FunctionName : PrefixExpr
+{
+    Name[] names;
+    Name method_name;
+
+    this(Name[] names, Name method_name)
+    {
+        this.names = names;
+        this.method_name = method_name;
+    }
+
+    override T accept(NodeVisitor!T visitor)
+    {
+        return visitor.visitFunctionName(this);
+    }
+}
+
 class FunctionThunk : Expr
 {
     Name[] params;
@@ -483,7 +638,7 @@ class Unary : Expr
         Neg,
         Not,
         Len,
-	None,
+        None,
     }
 
     UnaryOp op;
@@ -498,119 +653,5 @@ class Unary : Expr
     override T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitUnary(this);
-    }
-}
-
-class Index : Expr
-{
-    Expr table;
-    Expr key;
-
-    this(Expr table, Expr key)
-    {
-        this.table = table;
-        this.key = key;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitIndex(this);
-    }
-}
-
-class Field : Expr
-{
-    Expr table;
-    Name key;
-
-    this(Expr table, Name key)
-    {
-        this.table = table;
-        this.key = key;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitField(this);
-    }
-}
-
-class FunctionCallExpr : Expr
-{
-    Expr func;
-    Args args;
-
-    this(Expr func, Args args)
-    {
-        this.func = func;
-        this.args = args;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitFunctionCallExpr(this);
-    }
-}
-
-class MethodCall : Expr
-{
-    Expr target;
-    Name method;
-    Args args;
-
-    this(Expr target, Name method, Args args)
-    {
-        this.target = target;
-        this.method = method;
-        this.args = args;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitMethodCall(this);
-    }
-}
-
-struct Args
-{
-    Expr[] exprs;
-    Table table;
-    String str;
-
-    this(Expr[] exprs)
-    {
-        this.exprs = exprs;
-    }
-
-    this(Table table)
-    {
-        this.table = table;
-    }
-
-    this(String str)
-    {
-        this.str = str;
-    }
-}
-
-class Table : Expr
-{
-    struct Field
-    {
-        Expr key;
-        Name name;
-        Expr value;
-    }
-
-    Field[] fields;
-
-    this(Field[] fields)
-    {
-        this.fields = fields;
-    }
-
-    override T accept(T)(NodeVisitor!T visitor)
-    {
-        return visitor.visitTable(this);
     }
 }
