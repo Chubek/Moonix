@@ -61,6 +61,7 @@ enum TokenKind
     ConstReal,
     ConstString,
     ConstName,
+    Newline,
 }
 
 struct Position
@@ -93,6 +94,7 @@ class Scanner
     string source;
     size_t line_no;
     size_t column_no;
+    bool whitespace_allowed = true;
 
     this(string source)
     {
@@ -119,13 +121,13 @@ class Scanner
 
     void skipNewline()
     {
-        while (columnsLeft() && (peekChar() == '\n' || peekChar() == '\r'))
-            skipChar();
+        while (this.whitespace_allowed && columnsLeft() && (peekChar() == '\n' || peekChar() == '\r'))
+            this.line_no++;
     }
 
     void skipWhitespace()
     {
-        while (columnsLeft() && isWhite(peekChar()))
+        while (this.whitespace_allowed && columnsLeft() && isWhite(peekChar()))
             skipChar();
     }
 
@@ -429,7 +431,16 @@ class Scanner
         while (true)
         {
             skipWhitespace();
-            skipNewline();
+
+            if (peekChar == '\r' || peekChar == '\n')
+            {
+                skipNewline();
+                tokens ~= Token("\n", TokenKind.Newline, getCurrentPosition());
+                continue;
+            }
+
+            if (!this.whitespace_allowed)
+                this.whitespace_allowed = true;
 
             if (!columnsLeft())
                 break;
@@ -447,7 +458,10 @@ class Scanner
             else if (isOperator(peekChar()))
                 tokens ~= scanOperator();
             else if (isPunct(peekChar()))
+            {
+                this.whitespace_allowed = false;
                 tokens ~= scanPunctuation();
+            }
             else if (isDelimiter(peekChar()))
                 tokens ~= scanDelimiter();
             else if (isStringDelim(peekChar()))
