@@ -1,21 +1,37 @@
 module moonix.stackvm;
 
-import std.stdio, std.range, std.typecons, std.algorithm, std.container,
-    std.string, std.concurrency, std.process, std.variant, core.memory,
-    core.attribute, core.sync.barrier, core.sync.condition;
+import std.stdio, std.math, std.range, std.typecons, std.algorithm,
+    std.container, std.string, std.concurrency, std.process, std.variant,
+    core.memory, core.attribute, core.sync.barrier, core.sync.condition;
 
 enum MAX_CONST = 256;
 enum MAX_DATA = 65536;
 enum MAX_CALL = 8096;
 enum MAX_CODE = 16384;
 
+alias Environment = TValue[Identifier];
 alias DataStack = TValue[MAX_DATA];
 alias CallStack = CallFrame[MAX_CALL];
 alias CodeStack = Code[MAX_CODE];
 alias ConstantPool = TValue[MAX_CONST];
+alias TableEntries = SList!Entry;
 alias Address = long;
 alias Index = ubyte;
-alias TableEntries = SList!Entry;
+
+struct Identifier
+{
+    private string value;
+
+    this(string value)
+    {
+        this.value = value;
+    }
+
+    string getIDValue()
+    {
+        return this.value;
+    }
+}
 
 class Table
 {
@@ -39,7 +55,7 @@ class Table
 
     bool setEntry(TValue key, TValue value)
     {
-        foreach (ref entry; this.entries)
+        foreach (ref entry; this.entries.opSlice())
         {
             if (entry.key == key)
             {
@@ -47,6 +63,14 @@ class Table
                 return true;
             }
         }
+        return false;
+    }
+
+    bool hasEntry(TValue key)
+    {
+        foreach (entry; this.entries.opSlice())
+            if (entry.key == key)
+                return true;
         return false;
     }
 
@@ -131,39 +155,6 @@ struct Entry
     }
 }
 
-struct Closure
-{
-    Address program_counter;
-    CallFrame frame;
-    private ConstantPool constants;
-
-    this(Address program_counter, CallFrame frame)
-    {
-        this.program_counter = program_counter;
-        this.frame = frame;
-        this.constants = null;
-    }
-
-    TValue getConstant(Index index)
-    {
-        if (index >= CONST_MAX)
-            throw new StackVMError("Constant index too high", index);
-        return this.constants[index];
-    }
-
-    void setConstant(Index index, TValue value)
-    {
-        if (index >= CONST_MAX)
-            throw new StackVMError("Constant index too high", index);
-        this.constants[index] = value;
-    }
-
-    bool opEquals(const Closure rhs) const
-    {
-        return this.code == rhs.code && this.frame == rhs.frame;
-    }
-}
-
 enum Instruction
 {
     Add,
@@ -196,27 +187,26 @@ enum Instruction
     LoadAddress,
     LoadTable,
     LoadIndex,
-    LoadClosure,
+    LoadIdentifier,
     InsertTableEntry,
     GetTableEntry,
     SetTableEntry,
+    CheckTableEntry,
     SetConstAtTopFrame,
     GetConstAtTopFrame,
     SetConstAtGlobals,
     GetConstAtGlobals,
     DuplicateTop,
     SwapTop,
+    OverTop,
     RotateTop3,
     RotateTop4,
     Jump,
     JumpIfTrue,
     JumpIfFalse,
-    ReturnFromFunction,
-    Varargs,
-    MarkClosure,
-    CallClosure,
-    CallFunction,
-    CallFunctionConcurrently,
+    Call,
+    CallConcurrently,
+    Return,
 }
 
 struct Code
@@ -281,7 +271,6 @@ struct TValue
         Address,
         Table,
         Index,
-        Closure,
     }
 
     TValueKind kind;
@@ -294,7 +283,6 @@ struct TValue
         Address v_address;
         Table v_table;
         Index v_index;
-        Closure v_closure;
     }
 
     this(TValueKind kind)
@@ -338,12 +326,6 @@ struct TValue
         this.v_index = v_index;
     }
 
-    this(Closure v_closure)
-    {
-        this.kind = TValueKind.Closure;
-        this.v_closure = v_closure;
-    }
-
     static TValue newNil()
     {
         return TValue(TValueKind.Nil);
@@ -379,11 +361,6 @@ struct TValue
         return TValue(v_index);
     }
 
-    static TValue newClosure(Closure v_closure)
-    {
-        return TValue(v_closure);
-    }
-
     bool opEquals(const TValue rhs) const
     {
         if (this.kind == rhs.kind)
@@ -404,8 +381,6 @@ struct TValue
                 return this.v_table == rhs.v_table;
             case TValueKind.Index:
                 return this.v_index == rhs.v_index;
-            case TValueKind.Closure:
-                return this.v_closure == rhs.v_closure;
             default:
                 return false;
             }
@@ -472,7 +447,7 @@ class Interpreter
 
     void pushData(TValue value)
     {
-        if (this.stack_pointer + 1 >= MAX_DATA)
+        if (this.stack_pointer >= MAX_DATA)
             throw new StackVMError("Data stack overflow", this.stack_pointer);
         this.data_stack[++this.stack_pointer] = value;
     }
@@ -568,23 +543,10 @@ class Interpreter
         return data.v_index;
     }
 
-    void pushClosure(Closure value)
-    {
-        pushData(TValue.newClosure(value));
-    }
-
-    Closure popClosure()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Closure)
-            throw new StackVMError("Expected Closure value at TOS", this.stack_pointer);
-        return data.v_closure;
-    }
-
     void swapTopOfDataStack()
     {
         if (this.stack_pointer < 2)
-            throw new StackVMError("Not enough data for swap", this.stack_pointer);
+            throw new StackVMError("Not enough data for Swap", this.stack_pointer);
         auto tmp = topData();
         this.data_stack[this.stack_pointer] = this.data_stack[this.stack_pointer - 1];
         this.data_stack[this.stack_pointer - 1] = tmp;
@@ -593,9 +555,17 @@ class Interpreter
     void duplicateTopOfDataStack()
     {
         if (this.stack_pointer <= 0)
-            throw new StackVMError("Not enough data for duplicate", this.stack_pointer);
+            throw new StackVMError("Not enough data for Duplicate", this.stack_pointer);
         auto top = topDate();
         pushDate(top);
+    }
+
+    void overTopOfDataStack()
+    {
+        if (this.stack_pointer < 2)
+            throw new StackVMError("Not enough data for Over", this.stack_pointer);
+        auto tmp = this.data_stack[this.stack_pointer - 1];
+        pushData(tmp);
     }
 
     void rotateTop3OfDataStack()
@@ -746,6 +716,11 @@ class Interpreter
         this.frame_pointer = static_link;
     }
 
+    void setTopCallFrame(CallFrame frame)
+    {
+        this.call_stack[this.call_size] = frame;
+    }
+
     void setProgramCounter(Address new_address)
     {
         this.program_counter = new_address;
@@ -792,7 +767,7 @@ class Interpreter
             case Instruction.Pow:
                 auto rhs = popNumber();
                 auto lhs = popNumber();
-                pushNumber(lhs ^^ rhs);
+                pushNumber(pow(lhs, rhs));
                 continue;
             case Instruction.Shr:
                 ulong rhs = cast(ulong) popNumber();
@@ -958,7 +933,55 @@ class Interpreter
                     throw new StackVMError("No such index at table", this.stack_pointer);
                 pushTable(table);
                 continue;
-
+            case Instruction.CheckTableEntry:
+                auto key = popData();
+                auto table = popTable();
+                pushBoolean(table.hasEntry(key));
+                continue;
+            case Instruction.DuplicateTop:
+                duplicateTopOfDataStack();
+                continue;
+            case Instruction.SwapTop:
+                swapTopOfDataStack();
+                continue;
+            case Instruction.OverTop:
+                overTopOfDataStack();
+                continue;
+            case Instruction.Rotate3:
+                rotateTop3OfDataStack();
+                continue;
+            case Instruction.Rotate4:
+                rotateTop4OfDataStack();
+                continue;
+            case Instruction.Jump:
+                auto addr = popAddress();
+                setProgramCounter(addr);
+                continue;
+            case Instruction.JumpIfTrue:
+                auto addr = popAddress();
+                auto boolean = popBoolean();
+                if (boolean)
+                    setProgramCounter(addr);
+                continue;
+            case Instruction.JumpIfFalse:
+                auto addr = popAddress();
+                auto boolean = popBoolean();
+                if (!boolean)
+                    setProgramCounter(addr);
+                continue;
+            case Instruction.Call:
+                auto nargs = popIndex();
+                auto nlocals = popIndex();
+                setupNewCallFrame(nargs, nlocals);
+                continue;
+            case Instruction.CallConcurrently:
+                // todo
+                continue;
+            case Instruction.Return:
+                popCallStackAndClear();
+                continue;
+            default:
+                continue;
             }
 
         }
