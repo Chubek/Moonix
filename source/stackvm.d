@@ -11,7 +11,7 @@ enum MAX_CODE = 16384;
 
 alias DataStack = TValue[MAX_DATA];
 alias CallStack = CallFrame[MAX_CALL];
-alias CodeList = Instruction[MAX_CODE];
+alias CodeStack = Code[MAX_CODE];
 alias ConstantPool = TValue[MAX_CONST];
 alias Address = long;
 alias Index = ubyte;
@@ -175,6 +175,7 @@ enum Instruction
     BitNot,
     BitXor,
     BitOr,
+    CatString,
     LoadNil,
     LoadBoolean,
     LoadString,
@@ -207,6 +208,46 @@ enum Instruction
     MarkClosure,
     CallClosure,
     CallFunction,
+    CallFunctionConcurrently,
+}
+
+struct Code
+{
+    enum CodeKind
+    {
+        Instruction,
+        Value,
+    }
+
+    CodeKind kind;
+
+    union
+    {
+        Instruction v_instruction;
+        TValue v_value;
+    }
+
+    this(Instruction v_instruction)
+    {
+        this.kind = CodeKind.Instruction;
+        this.v_instruction = v_instruction;
+    }
+
+    this(TValue v_value)
+    {
+        this.kind = CodeKind.Value;
+        this.v_value = v_value;
+    }
+
+    static Code newInstruction(Instruction v_instruction)
+    {
+        return Code(v_instruction);
+    }
+
+    static Code newValue(TValue v_value)
+    {
+        return Code(v_value);
+    }
 }
 
 class StackVMError : Exception
@@ -400,7 +441,7 @@ class Interpreter
 {
     DataStack data_stack;
     CallStack call_stack;
-    CodeList code_list;
+    CodeStack code_stack;
     private Address stack_pointer;
     private Address frame_pointer;
     private Address program_counter;
@@ -412,7 +453,7 @@ class Interpreter
     {
         this.data_stack = null;
         this.call_stack = null;
-        this.code_list = null;
+        this.code_stack = null;
         this.stack_pointer = -1;
         this.frame_pointer = -1;
         this.program_counter = 0;
@@ -640,16 +681,34 @@ class Interpreter
         call_frame.setConstant(index, value);
     }
 
-    void insertCode(Instruction code)
+    void insertInstructionIntoCodeStack(Instruction value)
     {
-        this.code_list[++this.code_size] = code;
+        this.code_stack[++this.code_size] = Code.newInstruction(value);
     }
 
-    Instruction nextCode()
+    void insertValueIntoCodeStack(TValue value)
+    {
+        this.code_stack[++this.code_size] = Code.newValue(value);
+    }
+
+    Instruction nextCodeInstruction()
     {
         if (this.code_size <= this.program_counter)
-            throw new StackVMError("Code list overflow", this.program_counter);
-        return this.code_list[this.program_counter++];
+            throw new StackVMError("Code stack overflow", this.program_counter);
+        auto code = this.code_stack[this.program_counter++];
+        if (code.kind != Code.CodeKind.Instruction)
+            throw new StackVMError("Expected instruction at PC", this.program_counter);
+        return code.v_instruction;
+    }
+
+    TValue nextCodeValue()
+    {
+        if (this.code_size <= this.program_counter)
+            throw new StackVMError("Code stack overflow", this.program_counter);
+        auto code = this.code_stack[this.program_counter++];
+        if (code.kind != Code.CodeKind.Value)
+            throw new StackVMError("Expected value at PC", this.program_counter);
+        return code.v_value;
     }
 
     bool codeRemains()
@@ -693,71 +752,168 @@ class Interpreter
     {
         while (codeRemains())
         {
-            Instruction next_code = nextCode();
+            Instruction next_code = nextCodeInstruction();
 
             switch (next_code)
             {
             case Instruction.Add:
-		auto rhs = popNumber();
-		auto lhs = popNumber();
-		pushNumber(lhs + rhs);
-	    case Instruction.Sub:
-		auto rhs = popNumber();
-		auto lhs = popNumber();
-		pushNumber(lhs - rhs);
-	    case Instruction.Mul:
-		auto rhs = popNumber();
-		auto lhs = popNumber();
-		pushNumber(lhs * rhs);
-	    case Instruction.Div:
-		auto rhs = popNumber();
-		auto lhs = popNumber();
-		pushNumber(lhs / rhs);
-	    case Instruction.Mod:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs % rhs);
-	    case Instruction.Pow:
-		auto rhs = popNumber();
-		auto lhs = popNumber();
-		pushNumber(lhs ^^ rhs);
-	    case Instruction.Shr:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs >> rhs);
-	    case Instruction.Shl:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs << rhs);
-	    case Instruction.Neg:
-		auto num = popNumber();
-		pushNumber(-num);
-	    case Instruction.Conj:
-		auto rhs = popBoolean();
-		auto lhs = popBoolean();
-		pushBoolean(lhs && rhs);
-	    case Instruction.Disj:
-		auto rhs = popBoolean();
-		auto lhs = popBoolean();
-		pushBoolean(lhs || rhs);
-	    case Instruction.Not:
-		auto boolean = popBoolean();
-		pushBoolean(!boolean);
-	    case Instruction.BitAnd:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs & rhs);
-	    case Instruction.BitOr:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs | rhs);
-	    case Instruction.BitXor:
-		ulong rhs = cast(ulong) popNumber();
-		ulong lhs = cast(ulong) popNumber();
-		pushNumber(lhs ^ rhs);
-	    case Instruction.BitNot:
-		ulong num = cast(ulong) popNumber();
-		pushNumber(~num);
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushNumber(lhs + rhs);
+                continue;
+            case Instruction.Sub:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushNumber(lhs - rhs);
+                continue;
+            case Instruction.Mul:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushNumber(lhs * rhs);
+                continue;
+            case Instruction.Div:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushNumber(lhs / rhs);
+                continue;
+            case Instruction.Mod:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs % rhs);
+                continue;
+            case Instruction.Pow:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushNumber(lhs ^^ rhs);
+                continue;
+            case Instruction.Shr:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs >> rhs);
+                continue;
+            case Instruction.Shl:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs << rhs);
+                continue;
+            case Instruction.Neg:
+                auto num = popNumber();
+                pushNumber(-num);
+                continue;
+            case Instruction.Conj:
+                auto rhs = popBoolean();
+                auto lhs = popBoolean();
+                pushBoolean(lhs && rhs);
+                continue;
+            case Instruction.Disj:
+                auto rhs = popBoolean();
+                auto lhs = popBoolean();
+                pushBoolean(lhs || rhs);
+                continue;
+            case Instruction.Not:
+                auto boolean = popBoolean();
+                pushBoolean(!boolean);
+                continue;
+            case Instruction.BitAnd:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs & rhs);
+                continue;
+            case Instruction.BitOr:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs | rhs);
+                continue;
+            case Instruction.BitXor:
+                ulong rhs = cast(ulong) popNumber();
+                ulong lhs = cast(ulong) popNumber();
+                pushNumber(lhs ^ rhs);
+                continue;
+            case Instruction.BitNot:
+                ulong num = cast(ulong) popNumber();
+                pushNumber(~num);
+                continue;
+            case Instruction.Gt:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushBoolean(lhs > rhs);
+                continue;
+            case Instruction.Ge:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushBoolean(lhs >= rhs);
+                continue;
+            case Instruction.Lt:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushBoolean(lhs < rhs);
+                continue;
+            case Instruction.Le:
+                auto rhs = popNumber();
+                auto lhs = popNumber();
+                pushBoolean(lhs <= rhs);
+                continue;
+            case Instruction.Eq:
+                auto rhs = popData();
+                auto lhs = popData();
+                pushBoolean(lhs == rhs);
+                continue;
+            case Instruction.Ne:
+                auto rhs = popData();
+                auto lhs = popData();
+                pushBoolean(lhs != rhs);
+                continue;
+            case Instruction.CatString:
+                auto rhs = popString();
+                auto lhs = popString();
+                pushString(lhs ~ rhs);
+                continue;
+            case Instruction.StoreNil:
+                pushNil();
+                continue;
+            case Instruction.StoreBoolean:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Boolean)
+                    throw StackVMError("Expected Boolean value at PC", this.program_counter);
+                pushBoolean(value.v_boolean);
+                continue;
+            case Instruction.StoreString:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.String)
+                    throw StackVMError("Expected String value at PC", this.program_counter);
+                pushString(value.v_string);
+                continue;
+            case Instruction.StoreNumber:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Number)
+                    throw StackVMError("Expected Number value at PC", this.program_counter);
+                pushString(value.v_string);
+                continue;
+            case Instruction.StoreAddress:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Address)
+                    throw new StackVMError("Expected Address value at PC", this.program_counter);
+                pushAddress(value.v_address);
+                continue;
+            case Instruction.StoreIndex:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Index)
+                    throw new StackVMError("Expected Index value at PC", this.program_counter);
+                pushIndex(value.v_index);
+                continue;
+            case Instruction.StoreTable:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Table)
+                    throw new StackVMError("Expected Table value at PC", this.program_counter);
+                pushTable(value.v_table);
+                continue;
+            case Instruction.StoreClosure:
+                auto value = nextCodeValue();
+                if (value.kind != TValue.TValueKind.Closure)
+                    throw new StackVMError("Expected Closure value at PC", this.program_counter);
+                pushClosure(value.v_closure);
+                continue;
+
             }
 
         }
