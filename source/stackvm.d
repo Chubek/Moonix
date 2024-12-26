@@ -9,7 +9,6 @@ enum MAX_DATA = 65536;
 enum MAX_CALL = 8096;
 enum MAX_CODE = 16384;
 
-alias Environment = TValue[Identifier];
 alias DataStack = TValue[MAX_DATA];
 alias CallStack = CallFrame[MAX_CALL];
 alias CodeStack = Code[MAX_CODE];
@@ -17,21 +16,6 @@ alias ConstantPool = TValue[MAX_CONST];
 alias TableEntries = SList!Entry;
 alias Address = long;
 alias Index = ubyte;
-
-struct Identifier
-{
-    private string value;
-
-    this(string value)
-    {
-        this.value = value;
-    }
-
-    string getIDValue()
-    {
-        return this.value;
-    }
-}
 
 class Table
 {
@@ -180,22 +164,21 @@ enum Instruction
     BitXor,
     BitOr,
     CatString,
-    LoadNil,
-    LoadBoolean,
-    LoadString,
-    LoadNumber,
-    LoadAddress,
-    LoadTable,
-    LoadIndex,
-    LoadIdentifier,
+    StoreNil,
+    StoreBoolean,
+    StoreString,
+    StoreNumber,
+    StoreAddress,
+    StoreTable,
+    StoreIndex,
     InsertTableEntry,
     GetTableEntry,
     SetTableEntry,
     CheckTableEntry,
-    SetConstAtTopFrame,
-    GetConstAtTopFrame,
-    SetConstAtGlobals,
-    GetConstAtGlobals,
+    SetConstantAtTopFrame,
+    GetConstantAtTopFrame,
+    SetConstantAtGlobals,
+    GetConstantAtGlobals,
     DuplicateTop,
     SwapTop,
     OverTop,
@@ -556,8 +539,8 @@ class Interpreter
     {
         if (this.stack_pointer <= 0)
             throw new StackVMError("Not enough data for Duplicate", this.stack_pointer);
-        auto top = topDate();
-        pushDate(top);
+        auto top = topData();
+        pushData(top);
     }
 
     void overTopOfDataStack()
@@ -608,14 +591,14 @@ class Interpreter
 
     TValue getArgument(Index index)
     {
-        auto call_frame = topCallFrame();
+        auto call_frame = getTopFrame();
         auto nargs = call_frame.nargs;
         return this.data_stack[this.frame_pointer + (nargs - index)];
     }
 
     TValue getLocal(Index index)
     {
-        auto call_frame = topCallFrame();
+        auto call_frame = getTopFrame();
         auto nlocals = call_frame.nlocals;
         auto nargs = call_frame.nargs;
         return this.data_stack[this.frame_pointer + ((nargs + nlocals) - index)];
@@ -641,6 +624,12 @@ class Interpreter
         return call_frame.getConstant(index);
     }
 
+    void setConstantAtTopFrame(Index index, TValue value)
+    {
+        auto call_frame = getTopFrame();
+        call_frame.setConstant(index, value);
+    }
+
     CallFrame getTopFrame() const
     {
         return this.call_stack[this.call_size];
@@ -651,12 +640,6 @@ class Interpreter
         if (this.call_size <= 0)
             throw new StackVMError("Call stack underflow", this.call_size);
         return this.call_stack[this.call_size--];
-    }
-
-    void setConstantAtTopFrame(Index index, TValue value)
-    {
-        auto call_frame = getTopFrame();
-        call_frame.setConstant(index, value);
     }
 
     void insertInstructionIntoCodeStack(Instruction value)
@@ -857,19 +840,19 @@ class Interpreter
             case Instruction.StoreBoolean:
                 auto value = nextCodeValue();
                 if (value.kind != TValue.TValueKind.Boolean)
-                    throw StackVMError("Expected Boolean value at PC", this.program_counter);
+                    throw new StackVMError("Expected Boolean value at PC", this.program_counter);
                 pushBoolean(value.v_boolean);
                 continue;
             case Instruction.StoreString:
                 auto value = nextCodeValue();
                 if (value.kind != TValue.TValueKind.String)
-                    throw StackVMError("Expected String value at PC", this.program_counter);
+                    throw new StackVMError("Expected String value at PC", this.program_counter);
                 pushString(value.v_string);
                 continue;
             case Instruction.StoreNumber:
                 auto value = nextCodeValue();
                 if (value.kind != TValue.TValueKind.Number)
-                    throw StackVMError("Expected Number value at PC", this.program_counter);
+                    throw new StackVMError("Expected Number value at PC", this.program_counter);
                 pushString(value.v_string);
                 continue;
             case Instruction.StoreAddress:
@@ -890,7 +873,7 @@ class Interpreter
                     throw new StackVMError("Expected Table value at PC", this.program_counter);
                 pushTable(value.v_table);
                 continue;
-            case Instruction.SetConstAtTopFrame:
+            case Instruction.SetConstantAtTopFrame:
                 auto index = popIndex();
                 auto value = popData();
                 setConstantAtTopFrame(index, value);
@@ -916,7 +899,7 @@ class Interpreter
                 auto entry = table.getEntry(key);
                 if (entry.isNull)
                     throw new StackVMError("No such index at table", this.stack_pointer);
-                pushData(entry.value);
+                pushData(entry.get.value);
                 continue;
             case Instruction.InsertTableEntry:
                 auto key = popData();
@@ -947,10 +930,10 @@ class Interpreter
             case Instruction.OverTop:
                 overTopOfDataStack();
                 continue;
-            case Instruction.Rotate3:
+            case Instruction.RotateTop3:
                 rotateTop3OfDataStack();
                 continue;
-            case Instruction.Rotate4:
+            case Instruction.RotateTop4:
                 rotateTop4OfDataStack();
                 continue;
             case Instruction.Jump:
