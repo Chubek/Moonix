@@ -37,6 +37,19 @@ class Table
         this.count++;
     }
 
+    bool setEntry(TValue key, TValue value)
+    {
+        foreach (ref entry; this.entries)
+        {
+            if (entry.key == key)
+            {
+                entry.value = value;
+                return true;
+            }
+        }
+        return false;
+    }
+
     Nullable!Entry getEntry(TValue key)
     {
         Nullable!Entry found;
@@ -183,13 +196,8 @@ enum Instruction
     LoadAddress,
     LoadTable,
     LoadIndex,
-    StoreNil,
-    StoreBoolean,
-    StoreString,
-    StoreNumber,
-    StoreAddress,
-    StoreTable,
-    StoreIndex,
+    LoadClosure,
+    InsertTableEntry,
     GetTableEntry,
     SetTableEntry,
     SetConstAtTopFrame,
@@ -907,11 +915,48 @@ class Interpreter
                     throw new StackVMError("Expected Table value at PC", this.program_counter);
                 pushTable(value.v_table);
                 continue;
-            case Instruction.StoreClosure:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Closure)
-                    throw new StackVMError("Expected Closure value at PC", this.program_counter);
-                pushClosure(value.v_closure);
+            case Instruction.SetConstAtTopFrame:
+                auto index = popIndex();
+                auto value = popData();
+                setConstantAtTopFrame(index, value);
+                continue;
+            case Instruction.GetConstantAtTopFrame:
+                auto index = popIndex();
+                auto value = getConstantAtTopFrame(index);
+                pushData(value);
+                continue;
+            case Instruction.SetConstantAtGlobals:
+                auto index = popIndex();
+                auto value = popData();
+                setConstantAtGlobals(index, value);
+                continue;
+            case Instruction.GetConstantAtGlobals:
+                auto index = popIndex();
+                auto value = getConstantAtGlobals(index);
+                pushData(value);
+                continue;
+            case Instruction.GetTableEntry:
+                auto key = popData();
+                auto table = popTable();
+                auto entry = table.getEntry(key);
+                if (entry.isNull)
+                    throw new StackVMError("No such index at table", this.stack_pointer);
+                pushData(entry.value);
+                continue;
+            case Instruction.InsertTableEntry:
+                auto key = popData();
+                auto value = popData();
+                auto table = popTable();
+                table.insertEntry(key, value);
+                pushTable(table);
+                continue;
+            case Instruction.SetTableEntry:
+                auto key = popData();
+                auto value = popData();
+                auto table = popTable();
+                if (!table.setEntry(key, value))
+                    throw new StackVMError("No such index at table", this.stack_pointer);
+                pushTable(table);
                 continue;
 
             }
