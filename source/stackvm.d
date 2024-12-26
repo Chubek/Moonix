@@ -179,6 +179,9 @@ enum Instruction
     GetConstantAtTopFrame,
     SetConstantAtGlobals,
     GetConstantAtGlobals,
+    GetArgument,
+    GetLocal,
+    StoreLocal,
     DuplicateTop,
     SwapTop,
     OverTop,
@@ -604,6 +607,14 @@ class Interpreter
         return this.data_stack[this.frame_pointer + ((nargs + nlocals) - index)];
     }
 
+    void setLocal(Index index, TValue data)
+    {
+        auto call_frame = getTopFrame();
+        auto nlocals = call_frame.nlocals;
+        auto nargs = call_frame.nargs;
+        this.data_stack[this.frame_pointer + ((nargs + nlocals) - index)] = data;
+    }
+
     TValue getConstantAtGlobals(Index index)
     {
         if (index >= MAX_CONST)
@@ -962,6 +973,19 @@ class Interpreter
                 continue;
             case Instruction.Return:
                 popCallStackAndClear();
+                continue;
+            case Instruction.GetArgument:
+                auto index = popIndex();
+                pushData(getArgument(index));
+                continue;
+            case Instruction.GetLocal:
+                auto index = popIndex();
+                pushData(getLocal(index));
+                continue;
+            case Instruction.StoreLocal:
+                auto index = popIndex();
+                auto data = popData();
+                setLocal(index, data);
                 continue;
             default:
                 continue;
