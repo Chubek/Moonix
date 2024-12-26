@@ -7,11 +7,11 @@ interface ASTNode
     T accept(T)(NodeVisitor!T visitor);
 }
 
-interface Expr : Node
+interface Expr : ASTNode
 {
 }
 
-interface Stat : Node
+interface Stat : ASTNode
 {
 }
 
@@ -23,9 +23,9 @@ interface PrefixExpr : Factor
 {
 }
 
-template NodeVisitor(R)
+template ASTNodeVisitor(R)
 {
-    interface NodeVisitor
+    interface ASTNodeVisitor
     {
         R visitBlock(Block stat);
         R visitAssign(Assign stat);
@@ -77,7 +77,7 @@ class Block : Stat
         this.laststat = laststat;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitBlock(this);
     }
@@ -94,7 +94,7 @@ class Assign : Stat
         this.values = values;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitAssign(this);
     }
@@ -109,7 +109,7 @@ class FunctionCallStat : Stat
         this.call = call;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFunctionCallStat(this);
     }
@@ -124,7 +124,7 @@ class Do : Stat
         this.block = block;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitDo(this);
     }
@@ -141,7 +141,7 @@ class While : Stat
         this.block = block;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitWhile(this);
     }
@@ -158,7 +158,7 @@ class Repeat : Stat
         this.condition = condition;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitRepeat(this);
     }
@@ -183,7 +183,7 @@ class If : Stat
         this.else_block = else_block;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitIf(this);
     }
@@ -206,7 +206,7 @@ class For : Stat
         this.block = block;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFor(this);
     }
@@ -218,14 +218,14 @@ class ForIn : Stat
     Expr[] iterators;
     Block block;
 
-    this(string[] names, Expr[] iterators, Block block)
+    this(Name[] names, Expr[] iterators, Block block)
     {
         this.names = names;
         this.iterators = iterators;
         this.block = block;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitForIn(this);
     }
@@ -242,7 +242,7 @@ class FunctionDef : Stat
         this.thunk = thunk;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFunctionDef(this);
     }
@@ -259,7 +259,7 @@ class LocalFunction : Stat
         this.thunk = thunk;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitLocalFunction(this);
     }
@@ -276,7 +276,7 @@ class LocalVars : Stat
         this.values = values;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitLocalVars(this);
     }
@@ -291,7 +291,7 @@ class Return : Stat
         this.values = values;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitReturn(this);
     }
@@ -306,7 +306,7 @@ class Goto : Stat
         this.label = label;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitGoto(this);
     }
@@ -321,7 +321,7 @@ class Label : Stat
         this.name = name;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitLabel(this);
     }
@@ -329,7 +329,7 @@ class Label : Stat
 
 class Break : Stat
 {
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitBreak(this);
     }
@@ -337,7 +337,7 @@ class Break : Stat
 
 class Nil : Factor
 {
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitNil(this);
     }
@@ -352,7 +352,7 @@ class Boolean : Factor
         this.value = value;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitBoolean(this);
     }
@@ -367,7 +367,7 @@ class Number : Factor
         this.value = value;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitNumber(this);
     }
@@ -382,7 +382,7 @@ class String : Factor
         this.value = value;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitString(this);
     }
@@ -397,7 +397,7 @@ class Name : Factor
         this.name = name;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitName(this);
     }
@@ -405,7 +405,7 @@ class Name : Factor
 
 class Varargs : Factor
 {
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitVarargs(this);
     }
@@ -420,7 +420,7 @@ class NestedExpr : Factor
         this.expr = expr;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitNestedExpr(this);
     }
@@ -459,7 +459,7 @@ class Table : Factor
         this.fields = fields;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitTable(this);
     }
@@ -476,7 +476,7 @@ class Index : PrefixExpr
         this.key = key;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitIndex(this);
     }
@@ -493,7 +493,7 @@ class Field : PrefixExpr
         this.key = key;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitField(this);
     }
@@ -510,7 +510,7 @@ class FunctionCallExpr : PrefixExpr
         this.args = args;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFunctionCallExpr(this);
     }
@@ -529,7 +529,7 @@ class MethodCall : PrefixExpr
         this.args = args;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitMethodCall(this);
     }
@@ -568,7 +568,7 @@ class FunctionName : PrefixExpr
         this.method_name = method_name;
     }
 
-    override T accept(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFunctionName(this);
     }
@@ -587,7 +587,7 @@ class FunctionThunk : Expr
         this.def_body = def_body;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitFunctionThunk(this);
     }
@@ -625,7 +625,7 @@ class Binary : Expr
         this.right = right;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitBinary(this);
     }
@@ -650,7 +650,7 @@ class Unary : Expr
         this.expr = expr;
     }
 
-    override T accept(T)(NodeVisitor!T visitor)
+    T accept(T)(NodeVisitor!T visitor)
     {
         return visitor.visitUnary(this);
     }
