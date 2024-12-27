@@ -5,34 +5,158 @@ import std.stdio, std.math, std.range, std.typecons, std.algorithm,
     core.memory, core.attribute, core.sync.barrier, core.sync.condition;
 
 enum MAX_CONST = 256;
-enum MAX_DATA = 65536;
-enum MAX_CALL = 8096;
-enum MAX_CODE = 16384;
+enum DJB2_INIT = 5381;
 
-alias DataStack = TValue[MAX_DATA];
-alias CallStack = CallFrame[MAX_CALL];
-alias CodeStack = Code[MAX_CODE];
+alias OperandStack = Stack!TValue;
+alias CallStack = Stack!CallFrame;
+alias CodeStack = Stack!Code;
+alias EnvironmentStack = Stack!Environment;
+alias Environment = TValue[Identifier];
 alias ConstantPool = TValue[MAX_CONST];
 alias TableEntries = SList!Entry;
 alias Address = long;
 alias Index = ubyte;
 
+class StackFlowError : Exception
+{
+    string msg;
+    Address address;
+
+    this(string msg, Address address)
+    {
+        super(msg);
+        this.address = address;
+    }
+}
+
+class StackVMError : Exception
+{
+    string msg;
+    Address address;
+
+    this(string msg, StackTrace trace)
+    {
+        super(msg);
+        this.trace = trace;
+    }
+}
+
+struct StackTrace
+{
+    string stack_name;
+    Address operand_stack_pointer;
+    Address call_stack_pointer;
+    Address code_stack_pointer;
+    Address frame_pointer;
+
+    this(string stack_name, Address operand_stack_pointer,
+            Address call_stack_pointer, Address code_stack_pointer, Address frame_pointer)
+    {
+        this.stack_name = stack_name;
+        this.operand_stack_pointer = operand_stack_pointer;
+        this.call_stack_pointer = call_stack_pointer;
+        this.code_stack_pointer = code_stack_pointer;
+        this.frame_pointer = frame_pointer;
+    }
+}
+
+struct Stack(T)
+{
+    private SList!T container = null;
+    private Address pointer = 0;
+    private size_t length = 0;
+    private string name = null;
+
+    this(string name)
+    {
+        this.name = name;
+    }
+
+    void push(T value)
+    {
+        this.container.insertFront(value);
+        this.pointer++;
+        this.length++;
+    }
+
+    Nullable!T topSafe()
+    {
+        Nullable!T front;
+        if (this.pointer > 0)
+            front = this.container.front();
+        return front;
+    }
+
+    T top()
+    {
+        auto front_nullable = topSafe();
+        if (front_nullable.isNull)
+            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.pointer);
+        return front_nullable.get;
+    }
+
+    T pop()
+    {
+        auto front_nullable = topSafe();
+        if (front_nullable.isNull)
+            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.pointer);
+        this.container.removeFront();
+        this.pointer--;
+        this.length--;
+        return front_nullable.get;
+    }
+
+    Address getPointer()
+    {
+        return this.pointer;
+    }
+
+    void setPointer(Address pointer)
+    {
+        this.pointer = pointer;
+    }
+
+    Address getLength()
+    {
+        return this.length;
+    }
+}
+
+struct Identifier
+{
+    private string value;
+
+    this(string value)
+    {
+        this.value = value;
+    }
+
+    string getIDValue()
+    {
+        return this.value;
+    }
+
+    size_t toHash() const @safe nothrow
+    {
+        size_t hash = DJB2_INIT;
+        foreach (chr; this.value)
+            hash = ((hash << 5) + hash) + chr;
+        return hash;
+    }
+
+    bool opEquals(const Identifier rhs) const
+    {
+        return getIDValue() == rhs.getIDValue();
+    }
+}
+
 class Table
 {
-    TableEntries entries;
-    size_t capacity;
-    size_t count;
-
-    this(size_t capacity)
-    {
-        this.capacity = capacity;
-        this.count = 0;
-    }
+    TableEntries entries = null;
+    size_t count = 0;
 
     void insertEntry(TValue key, TValue value)
     {
-        if (this.count >= this.capacity)
-            throw new StackVMError("Table size superceeds capacity", this.count);
         this.entries.insertFront(Entry(key, value));
         this.count++;
     }
@@ -234,21 +358,9 @@ struct Code
     }
 }
 
-class StackVMError : Exception
-{
-    string msg;
-    Address address;
-
-    this(string msg, Address address)
-    {
-        super(msg);
-        this.address = address;
-    }
-}
-
 struct TValue
 {
-    enum TValueKind
+    enum Kind
     {
         Nil,
         Boolean,
@@ -257,9 +369,10 @@ struct TValue
         Address,
         Table,
         Index,
+        Identifier,
     }
 
-    TValueKind kind;
+    Kind kind;
 
     union
     {
@@ -269,52 +382,59 @@ struct TValue
         Address v_address;
         Table v_table;
         Index v_index;
+        Identifier v_identifier;
     }
 
-    this(TValueKind kind)
+    this(Kind kind)
     {
         this.kind = kind;
     }
 
     this(bool v_boolean)
     {
-        this.kind = TValueKind.Boolean;
+        this.kind = Kind.Boolean;
         this.v_boolean = v_boolean;
     }
 
     this(string v_string)
     {
-        this.kind = TValueKind.String;
+        this.kind = Kind.String;
         this.v_string = v_string;
     }
 
     this(real v_number)
     {
-        this.kind = TValueKind.Number;
+        this.kind = Kind.Number;
         this.v_number = v_number;
     }
 
     this(Address v_address)
     {
-        this.kind = TValueKind.Address;
+        this.kind = Kind.Address;
         this.v_address = v_address;
     }
 
     this(Table v_table)
     {
-        this.kind = TValueKind.Table;
+        this.kind = Kind.Table;
         this.v_table = v_table;
     }
 
     this(Index v_index)
     {
-        this.kind = TValueKind.Index;
+        this.kind = Kind.Index;
         this.v_index = v_index;
+    }
+
+    this(Identifier v_identifier)
+    {
+        this.kind = Kind.Identifier;
+        this.v_identifier = v_identifier;
     }
 
     static TValue newNil()
     {
-        return TValue(TValueKind.Nil);
+        return TValue(Kind.Nil);
     }
 
     static TValue newBoolean(bool v_boolean)
@@ -347,26 +467,33 @@ struct TValue
         return TValue(v_index);
     }
 
+    static TValue newIdentifier(Identifier v_identifier)
+    {
+        return TValue(v_identifier);
+    }
+
     bool opEquals(const TValue rhs) const
     {
         if (this.kind == rhs.kind)
         {
             switch (this.kind)
             {
-            case TValueKind.Nil:
+            case Kind.Nil:
                 return true;
-            case TValueKind.Boolean:
+            case Kind.Boolean:
                 return this.v_boolean == rhs.v_boolean;
-            case TValueKind.String:
+            case Kind.String:
                 return this.v_string == rhs.v_string;
-            case TValueKind.Number:
+            case Kind.Number:
                 return this.v_number == rhs.v_number;
-            case TValueKind.Address:
+            case Kind.Address:
                 return this.v_address == rhs.v_address;
-            case TValueKind.Table:
+            case Kind.Table:
                 return this.v_table == rhs.v_table;
-            case TValueKind.Index:
+            case Kind.Index:
                 return this.v_index == rhs.v_index;
+            case Kind.Identifier:
+                return this.v_identifier == rhs.v_identifier;
             default:
                 return false;
             }
@@ -377,352 +504,84 @@ struct TValue
 
 struct CallFrame
 {
-    Address return_address;
-    Address static_link;
-    Index nargs, nlocals;
+    private Address return_address;
+    private Address static_link;
+    private Index nargs, nlocals;
     private ConstantPool constants;
+    private Environment environment;
 
-    this(Address return_address, Address static_link, Index nargs, Index nlocals)
+    this(Address return_address, Address static_link, Index nargs, Index nlocals,
+            Environment environment)
     {
         this.return_address = return_address;
         this.static_link = static_link;
         this.nargs = nargs;
         this.nlocals = nlocals;
         this.constants = null;
+        this.environment = environment;
     }
 
     void setConstant(Index index, TValue constant)
     {
         if (index >= MAX_CONST)
-            throw new StackVMError("Constant index too high", this.return_address);
+            throw new StackVMError("Constant index too high", index);
+        else if (index < 0)
+            throw new StackVMError("Constant index too low", index);
         this.constants[index] = constant;
     }
 
     TValue getConstant(Index index)
     {
         if (index >= MAX_CONST)
-            throw new StackVMError("Constant index too high", this.return_address);
+            throw new StackVMError("Constant index too high", index);
+        else if (index < 0)
+            throw new StackVMError("Constant index too low", index);
         return this.constants[index];
+    }
+
+    TValue accessEnvironment(const Identifier identifier) const
+    {
+        return this.environment[identifier];
+    }
+
+    Index getNumArgs() const
+    {
+	return this.nargs;
+    }
+
+    Index getNumLocals() const
+    {
+	return this.nlocals;
+    }
+
+    Address getReturnAddress() const
+    {
+	return this.return_address;
+    }
+
+    Address getStaticLink() const
+    {
+	return this.static_link;
     }
 }
 
 class Interpreter
 {
-    DataStack data_stack;
+    OperandStack operand_stack;
     CallStack call_stack;
     CodeStack code_stack;
-    private Address stack_pointer;
-    private Address frame_pointer;
-    private Address program_counter;
-    private size_t code_size;
-    private size_t call_size;
+    EnvironmentStack environment_stack;
     private ConstantPool globals;
+    private StackTrace trace;
 
     this()
     {
-        this.data_stack = null;
+        this.operand_stack = null;
         this.call_stack = null;
         this.code_stack = null;
-        this.stack_pointer = -1;
-        this.frame_pointer = -1;
-        this.program_counter = 0;
-        this.code_size = -1;
-        this.call_size = -1;
+        this.environment_stack = null;
         this.globals = null;
-    }
-
-    void pushData(TValue value)
-    {
-        if (this.stack_pointer >= MAX_DATA)
-            throw new StackVMError("Data stack overflow", this.stack_pointer);
-        this.data_stack[++this.stack_pointer] = value;
-    }
-
-    void pushNil()
-    {
-        pushData(TValue.newNil());
-    }
-
-    bool popNil()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Nil)
-            throw new StackVMError("Expected Nil value at TOS", this.stack_pointer);
-        return true;
-    }
-
-    void pushBoolean(bool value)
-    {
-        pushData(TValue.newBoolean(value));
-    }
-
-    bool popBoolean()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Boolean)
-            throw new StackVMError("Expected Boolean value at TOS", this.stack_pointer);
-        return data.v_boolean;
-    }
-
-    void pushString(string value)
-    {
-        pushData(TValue.newString(value));
-    }
-
-    string popString()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Boolean)
-            throw new StackVMError("Expected String value at TOS", this.stack_pointer);
-        return data.v_string;
-    }
-
-    void pushNumber(real value)
-    {
-        pushData(TValue.newNumber(value));
-    }
-
-    real popNumber()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Number)
-            throw new StackVMError("Expected Number value at TOS", this.stack_pointer);
-        return data.v_number;
-    }
-
-    void pushAddress(Address value)
-    {
-        pushData(TValue.newAddress(value));
-    }
-
-    Address popAddress()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Address)
-            throw new StackVMError("Expected Address value at TOS", this.stack_pointer);
-        return data.v_address;
-    }
-
-    void pushTable(Table value)
-    {
-        pushData(TValue.newTable(value));
-    }
-
-    Table popTable()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Table)
-            throw new StackVMError("Expected Table value at TOS", this.stack_pointer);
-        return data.v_table;
-    }
-
-    void pushIndex(Index value)
-    {
-        pushData(TValue.newIndex(value));
-    }
-
-    Index popIndex()
-    {
-        auto data = popData();
-        if (data.kind != TValue.TValueKind.Index)
-            throw new StackVMError("Expected Index value at TOS", this.stack_pointer);
-        return data.v_index;
-    }
-
-    void swapTopOfDataStack()
-    {
-        if (this.stack_pointer < 2)
-            throw new StackVMError("Not enough data for Swap", this.stack_pointer);
-        auto tmp = topData();
-        this.data_stack[this.stack_pointer] = this.data_stack[this.stack_pointer - 1];
-        this.data_stack[this.stack_pointer - 1] = tmp;
-    }
-
-    void duplicateTopOfDataStack()
-    {
-        if (this.stack_pointer <= 0)
-            throw new StackVMError("Not enough data for Duplicate", this.stack_pointer);
-        auto top = topData();
-        pushData(top);
-    }
-
-    void overTopOfDataStack()
-    {
-        if (this.stack_pointer < 2)
-            throw new StackVMError("Not enough data for Over", this.stack_pointer);
-        auto tmp = this.data_stack[this.stack_pointer - 1];
-        pushData(tmp);
-    }
-
-    void rotateTop3OfDataStack()
-    {
-        if (this.stack_pointer < 3)
-            throw new StackVMError("Not enough data for Rot3", this.stack_pointer);
-        auto tmp1 = topData();
-        auto tmp2 = this.data_stack[this.stack_pointer - 1];
-        auto tmp3 = this.data_stack[this.stack_pointer - 2];
-        this.data_stack[this.stack_pointer] = tmp3;
-        this.data_stack[this.stack_pointer - 1] = tmp2;
-        this.data_stack[this.stack_pointer - 2] = tmp1;
-    }
-
-    void rotateTop4OfDataStack()
-    {
-        if (this.stack_pointer < 4)
-            throw new StackVMError("Not enough data for Rot4", this.stack_pointer);
-        auto tmp1 = topData();
-        auto tmp2 = this.data_stack[this.stack_pointer - 1];
-        auto tmp3 = this.data_stack[this.stack_pointer - 2];
-        auto tmp4 = this.data_stack[this.stack_pointer - 3];
-        this.data_stack[this.stack_pointer] = tmp4;
-        this.data_stack[this.stack_pointer - 1] = tmp3;
-        this.data_stack[this.stack_pointer - 2] = tmp2;
-        this.data_stack[this.stack_pointer - 3] = tmp1;
-    }
-
-    TValue popData()
-    {
-        if (this.stack_pointer <= 0)
-            throw new StackVMError("Data stack underflow", this.stack_pointer);
-        return this.data_stack[this.stack_pointer--];
-    }
-
-    TValue topData()
-    {
-        return this.data_stack[this.stack_pointer];
-    }
-
-    TValue getArgument(Index index)
-    {
-        auto call_frame = getTopFrame();
-        auto nargs = call_frame.nargs;
-        return this.data_stack[this.frame_pointer + (nargs - index)];
-    }
-
-    TValue getLocal(Index index)
-    {
-        auto call_frame = getTopFrame();
-        auto nlocals = call_frame.nlocals;
-        auto nargs = call_frame.nargs;
-        return this.data_stack[this.frame_pointer + ((nargs + nlocals) - index)];
-    }
-
-    void setLocal(Index index, TValue data)
-    {
-        auto call_frame = getTopFrame();
-        auto nlocals = call_frame.nlocals;
-        auto nargs = call_frame.nargs;
-        this.data_stack[this.frame_pointer + ((nargs + nlocals) - index)] = data;
-    }
-
-    TValue getConstantAtGlobals(Index index)
-    {
-        if (index >= MAX_CONST)
-            throw new StackVMError("Global index too high", index);
-        return this.globals[index];
-    }
-
-    void setConstantAtGlobals(Index index, TValue value)
-    {
-        if (index >= MAX_CONST)
-            throw new StackVMError("Global index too high", index);
-        this.globals[index] = value;
-    }
-
-    TValue getConstantAtTopFrame(Index index)
-    {
-        auto call_frame = getTopFrame();
-        return call_frame.getConstant(index);
-    }
-
-    void setConstantAtTopFrame(Index index, TValue value)
-    {
-        auto call_frame = getTopFrame();
-        call_frame.setConstant(index, value);
-    }
-
-    CallFrame getTopFrame() const
-    {
-        return this.call_stack[this.call_size];
-    }
-
-    CallFrame popCallFrame()
-    {
-        if (this.call_size <= 0)
-            throw new StackVMError("Call stack underflow", this.call_size);
-        return this.call_stack[this.call_size--];
-    }
-
-    void insertInstructionIntoCodeStack(Instruction value)
-    {
-        this.code_stack[++this.code_size] = Code.newInstruction(value);
-    }
-
-    void insertValueIntoCodeStack(TValue value)
-    {
-        this.code_stack[++this.code_size] = Code.newValue(value);
-    }
-
-    Instruction nextCodeInstruction()
-    {
-        if (this.code_size <= this.program_counter)
-            throw new StackVMError("Code stack overflow", this.program_counter);
-        auto code = this.code_stack[this.program_counter++];
-        if (code.kind != Code.CodeKind.Instruction)
-            throw new StackVMError("Expected instruction at PC", this.program_counter);
-        return code.v_instruction;
-    }
-
-    TValue nextCodeValue()
-    {
-        if (this.code_size <= this.program_counter)
-            throw new StackVMError("Code stack overflow", this.program_counter);
-        auto code = this.code_stack[this.program_counter++];
-        if (code.kind != Code.CodeKind.Value)
-            throw new StackVMError("Expected value at PC", this.program_counter);
-        return code.v_value;
-    }
-
-    bool codeRemains()
-    {
-        return this.program_counter < this.code_size;
-    }
-
-    void setupNewCallFrame(Index nargs, Index nlocals)
-    {
-        if (this.call_size >= MAX_CALL)
-            throw new StackVMError("Call stack overflow", this.call_size);
-        this.call_stack[++this.call_size] = CallFrame(this.stack_pointer + nargs + nlocals,
-                this.frame_pointer, nargs, nlocals);
-        this.frame_pointer = this.stack_pointer;
-    }
-
-    void popCallStackAndClear()
-    {
-        if (this.call_size <= 0)
-            throw new StackVMError("Call stack underflow", this.call_size);
-        auto call_frame = popCallFrame();
-        auto return_address = call_frame.return_address;
-        auto static_link = call_frame.static_link;
-        auto nargs = call_frame.nargs;
-        auto nlocals = call_frame.nlocals;
-        this.stack_pointer = return_address - nargs - nlocals;
-        this.frame_pointer = static_link;
-    }
-
-    void setTopCallFrame(CallFrame frame)
-    {
-        this.call_stack[this.call_size] = frame;
-    }
-
-    void setProgramCounter(Address new_address)
-    {
-        this.program_counter = new_address;
-    }
-
-    Address getProgramCounter()
-    {
-        return this.program_counter;
+        this.trace = null;
     }
 
     void runVM()
@@ -850,37 +709,37 @@ class Interpreter
                 continue;
             case Instruction.StoreBoolean:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Boolean)
+                if (value.kind != TValue.Kind.Boolean)
                     throw new StackVMError("Expected Boolean value at PC", this.program_counter);
                 pushBoolean(value.v_boolean);
                 continue;
             case Instruction.StoreString:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.String)
+                if (value.kind != TValue.Kind.String)
                     throw new StackVMError("Expected String value at PC", this.program_counter);
                 pushString(value.v_string);
                 continue;
             case Instruction.StoreNumber:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Number)
+                if (value.kind != TValue.Kind.Number)
                     throw new StackVMError("Expected Number value at PC", this.program_counter);
                 pushString(value.v_string);
                 continue;
             case Instruction.StoreAddress:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Address)
+                if (value.kind != TValue.Kind.Address)
                     throw new StackVMError("Expected Address value at PC", this.program_counter);
                 pushAddress(value.v_address);
                 continue;
             case Instruction.StoreIndex:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Index)
+                if (value.kind != TValue.Kind.Index)
                     throw new StackVMError("Expected Index value at PC", this.program_counter);
                 pushIndex(value.v_index);
                 continue;
             case Instruction.StoreTable:
                 auto value = nextCodeValue();
-                if (value.kind != TValue.TValueKind.Table)
+                if (value.kind != TValue.Kind.Table)
                     throw new StackVMError("Expected Table value at PC", this.program_counter);
                 pushTable(value.v_table);
                 continue;
@@ -933,19 +792,19 @@ class Interpreter
                 pushBoolean(table.hasEntry(key));
                 continue;
             case Instruction.DuplicateTop:
-                duplicateTopOfDataStack();
+                duplicateTopOfOperandStack();
                 continue;
             case Instruction.SwapTop:
-                swapTopOfDataStack();
+                swapTopOfOperandStack();
                 continue;
             case Instruction.OverTop:
-                overTopOfDataStack();
+                overTopOfOperandStack();
                 continue;
             case Instruction.RotateTop3:
-                rotateTop3OfDataStack();
+                rotateTop3OfOperandStack();
                 continue;
             case Instruction.RotateTop4:
-                rotateTop4OfDataStack();
+                rotateTop4OfOperandStack();
                 continue;
             case Instruction.Jump:
                 auto addr = popAddress();
