@@ -5,17 +5,71 @@ import std.stdio, std.math, std.range, std.typecons, std.algorithm,
     core.memory, core.attribute, core.sync.barrier, core.sync.condition;
 
 enum MAX_CONST = 256;
+enum STACK_GROWTH_RATE = 65536;
 enum DJB2_INIT = 5381;
 
-alias OperandStack = Stack!TValue;
+alias Address = long;
+alias Index = size_t;
+
+alias OperandStack = Stack!Value;
 alias CallStack = Stack!CallFrame;
 alias CodeStack = Stack!Code;
-alias EnvironmentStack = Stack!Environment;
-alias Environment = TValue[Identifier];
-alias ConstantPool = TValue[MAX_CONST];
-alias TableEntries = SList!Entry;
-alias Address = long;
-alias Index = ubyte;
+alias UpvalueStack = Stack!Upvalue;
+alias TableEntries = SList!(Table.Entry);
+alias ConstantPool = Value[MAX_CONST];
+
+enum Instruction
+{
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FPow,
+    IPow,
+    Mod,
+    Disjunction,
+    Conjunction,
+    Not,
+    Negate,
+    BitwiseNot,
+    BitwiseOr,
+    BitwiseXor,
+    BitwiseAnd,
+    BitwiseShiftRight,
+    BitwiseShiftLeft,
+    TruncateReal,
+    FloorReal,
+    ConcatString,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    LoadLocal,
+    LoadGlobal,
+    StoreLocal,
+    StoreGlobal,
+    LoadGlobalPointer,
+    LoadConstantAtCallTOS,
+    StoreConstantAtCallTOS,
+    LoadNthArgument,
+    LoadFromCodeTOS,
+    LoadFromCodeAtOffset,
+    InsertIntoTable,
+    GetFromTable,
+    CheckIfTableHas,
+    MakeClosure,
+    CallClosure,
+    ReturnFromClosure,
+    StoreOuterUpvalue,
+    StoreLocalUpvalue,
+    LoadUpvalueAtTOS,
+    LoadUpvalueAtOffset,
+    Branch,
+    BranchfIfTrueTOS,
+    BranchIfFalseTOS,
+}
 
 class StackFlowError : Exception
 {
@@ -41,30 +95,11 @@ class StackVMError : Exception
     }
 }
 
-struct StackTrace
-{
-    string stack_name;
-    Address operand_stack_pointer;
-    Address call_stack_pointer;
-    Address code_stack_pointer;
-    Address frame_pointer;
-
-    this(string stack_name, Address operand_stack_pointer,
-            Address call_stack_pointer, Address code_stack_pointer, Address frame_pointer)
-    {
-        this.stack_name = stack_name;
-        this.operand_stack_pointer = operand_stack_pointer;
-        this.call_stack_pointer = call_stack_pointer;
-        this.code_stack_pointer = code_stack_pointer;
-        this.frame_pointer = frame_pointer;
-    }
-}
-
 struct Stack(T)
 {
-    private SList!T container = null;
-    private Address pointer = 0;
-    private size_t length = 0;
+    private T[] container = new T[STACK_GROWTH_RATE];
+    private size_t cursor = 0;
+    private size_t length = STACK_GROWTH_RATE;
     private string name = null;
 
     this(string name)
@@ -72,98 +107,129 @@ struct Stack(T)
         this.name = name;
     }
 
+    bool isEmpty() const
+    {
+        return this.cursor == 0;
+    }
+
+    void reallocateContainer()
+    {
+        this.length += STACK_GROWTH_RATE;
+        this.container.reserve(this.length);
+        this.container.length = this.length;
+    }
+
     void push(T value)
     {
-        this.container.insertFront(value);
-        this.pointer++;
-        this.length++;
-    }
-
-    Nullable!T topSafe()
-    {
-        Nullable!T front;
-        if (this.pointer > 0)
-            front = this.container.front();
-        return front;
-    }
-
-    T top()
-    {
-        auto front_nullable = topSafe();
-        if (front_nullable.isNull)
-            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.pointer);
-        return front_nullable.get;
+        if (this.cursor >= this.length)
+            reallocateContainer();
+        this.container[this.cursor++] = value;
     }
 
     T pop()
     {
+        if (!this.cursor)
+            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.cursor);
+        return this.container[--this.cursor];
+    }
+
+    Nullable!T topSafe() const
+    {
+        Nullable!T front;
+        if (!this.cursor)
+            throw new StackFlowError("The " ~ this.name ~ " stack undeflew", this.cursor);
+        front = this.container[this.cursor - 1];
+        return front;
+    }
+
+    T top() const
+    {
         auto front_nullable = topSafe();
         if (front_nullable.isNull)
-            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.pointer);
-        this.container.removeFront();
-        this.pointer--;
-        this.length--;
+            throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.cursor);
         return front_nullable.get;
     }
 
-    Address getPointer()
+    T* topAsPointer() const
     {
-        return this.pointer;
+        return &this.container[this.cursor - 1];
     }
 
-    void setPointer(Address pointer)
+    T opIndex(const size_t key) const
     {
-        this.pointer = pointer;
+        if (key >= this.cursor)
+            throw new StackFlowError("The " ~ this.name ~ " stack overflew", key);
+        return this.container[key];
     }
 
-    Address getLength()
+    void opIndexAssign(const T value, const size_t key)
+    {
+        if (key >= this.cursor)
+            throw new StackFlowError("The " ~ this.name ~ " stack overflew", key);
+        this.container[key] = value;
+    }
+
+    T[] opSlice(size_t dim : 0)(size_t i, size_t j) const
+    {
+        if (i <= 0)
+            throw new StackFlowError("The " ~ this.name ~ " stack underflew at slice", i);
+        else if (j >= this.cursor)
+            throw new StackFlowError("The " ~ this.name ~ " stack overflew at slice", j);
+        return this.container[i .. j];
+    }
+
+    T[] opIndex()(T[] slice)
+    {
+        return slice;
+    }
+
+    Address getCursor() const
+    {
+        return this.cursor;
+    }
+
+    void setCursor(size_t new_cursor)
+    {
+        this.cursor = new_cursor;
+    }
+
+    size_t getLength() const
     {
         return this.length;
     }
 }
 
-struct Identifier
-{
-    private string value;
-
-    this(string value)
-    {
-        this.value = value;
-    }
-
-    string getIDValue()
-    {
-        return this.value;
-    }
-
-    size_t toHash() const @safe nothrow
-    {
-        size_t hash = DJB2_INIT;
-        foreach (chr; this.value)
-            hash = ((hash << 5) + hash) + chr;
-        return hash;
-    }
-
-    bool opEquals(const Identifier rhs) const
-    {
-        return getIDValue() == rhs.getIDValue();
-    }
-}
-
 class Table
 {
+    struct Entry
+    {
+        Value key;
+        Value value;
+
+        this(Value key, Value value)
+        {
+            this.key = key;
+            this.value = value;
+        }
+
+        bool opEquals(const Entry rhs) const
+        {
+            return this.key == rhs.key && this.value == rhs.value;
+        }
+    }
+
     TableEntries entries = null;
     size_t count = 0;
 
-    void insertEntry(TValue key, TValue value)
+    void insertEntry(Value key, Value value)
     {
         this.entries.insertFront(Entry(key, value));
         this.count++;
     }
 
-    bool setEntry(TValue key, TValue value)
+    bool setEntry(Value key, Value value)
     {
-        foreach (ref entry; this.entries.opSlice())
+        foreach (ref entry; this.entries[])
         {
             if (entry.key == key)
             {
@@ -174,18 +240,18 @@ class Table
         return false;
     }
 
-    bool hasEntry(TValue key)
+    bool hasEntry(Value key)
     {
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             if (entry.key == key)
                 return true;
         return false;
     }
 
-    Nullable!Entry getEntry(TValue key)
+    Nullable!Entry getEntry(Value key)
     {
         Nullable!Entry found;
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
         {
             if (entry.key == key)
             {
@@ -198,21 +264,21 @@ class Table
 
     void iter(F)(F fn)
     {
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             fn(entry);
     }
 
     Entry[] map(F)(F fn)
     {
         Entry[] acc = null;
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             acc ~= fn(entry);
         return acc;
     }
 
     Entry[] fold(F)(F fn, Entry[] init)
     {
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             init ~= fn(entry);
         return init;
     }
@@ -220,7 +286,7 @@ class Table
     Entry[] filter(F)(F cond)
     {
         Entry[] filtered = null;
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             if (cond(entry))
                 filtered ~= entry;
         return filtered;
@@ -232,6 +298,19 @@ class Table
             this.entries.insertFront(elt);
     }
 
+    void cons(Entry elt)
+    {
+        this.entries.insertFront(elt);
+    }
+
+    Entry[] reverse()
+    {
+        Entry[] reverse = null;
+        foreach (entry; this.entries.reverse()[])
+            reverse ~= entry;
+        return reverse;
+    }
+
     Entry head()
     {
         return this.entries.front();
@@ -240,110 +319,38 @@ class Table
     Entry[] tail()
     {
         Entry[] tail = null;
-        foreach (entry; this.entries.opSlice())
+        foreach (entry; this.entries[])
             tail ~= entry;
         return tail[1 .. $];
     }
 }
 
-struct Entry
-{
-    TValue key;
-    TValue value;
-
-    this(TValue key, TValue value)
-    {
-        this.key = key;
-        this.value = value;
-    }
-
-    bool opEquals(const Entry rhs) const
-    {
-        return this.key == rhs.key && this.value == rhs.value;
-    }
-}
-
-enum Instruction
-{
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Pow,
-    Shr,
-    Shl,
-    Neg,
-    Eq,
-    Ne,
-    Gt,
-    Ge,
-    Lt,
-    Le,
-    Conj,
-    Disj,
-    Not,
-    BitAnd,
-    BitNot,
-    BitXor,
-    BitOr,
-    CatString,
-    StoreNil,
-    StoreBoolean,
-    StoreString,
-    StoreNumber,
-    StoreAddress,
-    StoreTable,
-    StoreIndex,
-    InsertTableEntry,
-    GetTableEntry,
-    SetTableEntry,
-    CheckTableEntry,
-    SetConstantAtTopFrame,
-    GetConstantAtTopFrame,
-    SetConstantAtGlobals,
-    GetConstantAtGlobals,
-    GetArgument,
-    GetLocal,
-    StoreLocal,
-    DuplicateTop,
-    SwapTop,
-    OverTop,
-    RotateTop3,
-    RotateTop4,
-    Jump,
-    JumpIfTrue,
-    JumpIfFalse,
-    Call,
-    CallConcurrently,
-    Return,
-}
-
 struct Code
 {
-    enum CodeKind
+    enum Kind
     {
         Instruction,
         Value,
+        EndClosureMarker,
     }
 
-    CodeKind kind;
+    Kind kind;
 
     union
     {
         Instruction v_instruction;
-        TValue v_value;
+        Value v_value;
     }
 
     this(Instruction v_instruction)
     {
-        this.kind = CodeKind.Instruction;
+        this.kind = Kind.Instruction;
         this.v_instruction = v_instruction;
     }
 
-    this(TValue v_value)
+    this(Value v_value)
     {
-        this.kind = CodeKind.Value;
+        this.kind = Kind.Value;
         this.v_value = v_value;
     }
 
@@ -352,13 +359,87 @@ struct Code
         return Code(v_instruction);
     }
 
-    static Code newValue(TValue v_value)
+    static Code newValue(Value v_value)
     {
         return Code(v_value);
     }
+
+    static Code newEndClosureMarker()
+    {
+        Code code;
+        code.kind = Kind.EndClosureMarker;
+        return code;
+    }
+
+    bool isInstruction() const
+    {
+        return this.kind == Kind.Instruction;
+    }
+
+    bool isValue() const
+    {
+        return this.kind == Kind.Value;
+    }
+
+    bool isEndClosureMarker() const
+    {
+        return this.kind = Kind.EndClosureMarker;
+    }
 }
 
-struct TValue
+struct CallFrame
+{
+    Index num_args, num_locals;
+    private Address static_link;
+    private Address frame_link;
+    private Address dynamic_link = -1;
+    private ConstantPool constant_pool = null;
+
+    this(Index num_args, Index num_locals, Address static_link, Address frame_link)
+    {
+        this.num_args = num_args;
+        this.num_locals = num_locals;
+        this.static_link = static_link;
+        this.frame_link = frame_link;
+    }
+
+    Address getStaticLink() const
+    {
+        return this.static_link;
+    }
+
+    Address getDynamicLink() const
+    {
+        return this.dynamic_link;
+    }
+
+    Address getFrameLink() const
+    {
+        return this.frame_link;
+    }
+
+    void setDynamicLink(const Address new_dynamic_link)
+    {
+        this.dynamic_link = new_dynamic_link;
+    }
+
+    bool isNestedCall() const
+    {
+        return this.dynamic_link == -1;
+    }
+
+    Value opIndex(const size_t index) const
+    {
+        return this.constant_pool[index];
+    }
+
+    void opIndexAssign(const size_t index, const Value value)
+    {
+        this.constant_pool[index] = value;
+    }
+}
+
+struct Value
 {
     enum Kind
     {
@@ -369,7 +450,8 @@ struct TValue
         Address,
         Table,
         Index,
-        Identifier,
+        Closure,
+        ValuePointer,
     }
 
     Kind kind;
@@ -382,7 +464,8 @@ struct TValue
         Address v_address;
         Table v_table;
         Index v_index;
-        Identifier v_identifier;
+        Closure v_closure;
+        Value* v_value_pointer;
     }
 
     this(Kind kind)
@@ -408,6 +491,12 @@ struct TValue
         this.v_number = v_number;
     }
 
+    this(ulong v_number)
+    {
+        this.kind = Kind.Number;
+        this.v_number = cast(real) v_number;
+    }
+
     this(Address v_address)
     {
         this.kind = Kind.Address;
@@ -426,53 +515,69 @@ struct TValue
         this.v_index = v_index;
     }
 
-    this(Identifier v_identifier)
+    this(Closure v_closure)
     {
-        this.kind = Kind.Identifier;
-        this.v_identifier = v_identifier;
+        this.kind = Kind.Closure;
+        this.v_closure = v_closure;
     }
 
-    static TValue newNil()
+    this(Value* v_value_pointer)
     {
-        return TValue(Kind.Nil);
+        this.kind = Kind.ValuePointer;
+        this.v_value_pointer = v_value_pointer;
     }
 
-    static TValue newBoolean(bool v_boolean)
+    static Value newNil()
     {
-        return TValue(v_boolean);
+        return Value(Kind.Nil);
     }
 
-    static TValue newString(string v_string)
+    static Value newBoolean(bool v_boolean)
     {
-        return TValue(v_string);
+        return Value(v_boolean);
     }
 
-    static TValue newNumber(real v_number)
+    static Value newString(string v_string)
     {
-        return TValue(v_number);
+        return Value(v_string);
     }
 
-    static TValue newAddress(Address v_address)
+    static Value newNumber(real v_number)
     {
-        return TValue(v_address);
+        return Value(v_number);
     }
 
-    static TValue newTable(Table v_table)
+    static Value newNumber(ulong v_number)
     {
-        return TValue(v_table);
+        return Value(v_number);
     }
 
-    static TValue newIndex(Index v_index)
+    static Value newAddress(Address v_address)
     {
-        return TValue(v_index);
+        return Value(v_address);
     }
 
-    static TValue newIdentifier(Identifier v_identifier)
+    static Value newTable(Table v_table)
     {
-        return TValue(v_identifier);
+        return Value(v_table);
     }
 
-    bool opEquals(const TValue rhs) const
+    static Value newIndex(Index v_index)
+    {
+        return Value(v_index);
+    }
+
+    static Value newClosure(Closure v_closure)
+    {
+        return Value(v_closure);
+    }
+
+    static Value newValuePointer(ValuePointer* v_value_pointer)
+    {
+        return Value(v_value_pointer);
+    }
+
+    bool opEquals(const Value rhs) const
     {
         if (this.kind == rhs.kind)
         {
@@ -494,362 +599,615 @@ struct TValue
                 return this.v_index == rhs.v_index;
             case Kind.Identifier:
                 return this.v_identifier == rhs.v_identifier;
+            case Kind.Closure:
+                return this.v_closure == rhs.v_closure;
+            case Kind.ValuePointer:
+                return this.v_value_pointer == rhs.v_value_pointer;
             default:
                 return false;
             }
         }
         return false;
     }
-}
 
-struct CallFrame
-{
-    private Address return_address;
-    private Address static_link;
-    private Index nargs, nlocals;
-    private ConstantPool constants;
-    private Environment environment;
-
-    this(Address return_address, Address static_link, Index nargs, Index nlocals,
-            Environment environment)
+    bool isNil() const
     {
-        this.return_address = return_address;
-        this.static_link = static_link;
-        this.nargs = nargs;
-        this.nlocals = nlocals;
-        this.constants = null;
-        this.environment = environment;
+        return this.kind == Kind.Nil;
     }
 
-    void setConstant(Index index, TValue constant)
+    bool isBoolean() const
     {
-        if (index >= MAX_CONST)
-            throw new StackVMError("Constant index too high", index);
-        else if (index < 0)
-            throw new StackVMError("Constant index too low", index);
-        this.constants[index] = constant;
+        return this.kind == Kind.Boolean;
     }
 
-    TValue getConstant(Index index)
+    bool isNumber() const
     {
-        if (index >= MAX_CONST)
-            throw new StackVMError("Constant index too high", index);
-        else if (index < 0)
-            throw new StackVMError("Constant index too low", index);
-        return this.constants[index];
+        return this.kind == Kind.Number;
     }
 
-    TValue accessEnvironment(const Identifier identifier) const
+    bool isString() const
     {
-        return this.environment[identifier];
+        return this.kind == Kind.String;
     }
 
-    Index getNumArgs() const
+    bool isAddress() const
     {
-	return this.nargs;
+        return this.kind == Kind.Address;
     }
 
-    Index getNumLocals() const
+    bool isIndex() const
     {
-	return this.nlocals;
+        return this.kind == Kind.Index;
     }
 
-    Address getReturnAddress() const
+    bool isTable() const
     {
-	return this.return_address;
+        return this.kind == Kind.Table;
     }
 
-    Address getStaticLink() const
+    bool isClosure() const
     {
-	return this.static_link;
+        return this.kind == Kind.Closure;
+    }
+
+    bool isValuePointer() const
+    {
+        return this.kind == Kind.ValuePointer;
     }
 }
 
-class Interpreter
+class Closure
 {
-    OperandStack operand_stack;
-    CallStack call_stack;
-    CodeStack code_stack;
-    EnvironmentStack environment_stack;
-    private ConstantPool globals;
-    private StackTrace trace;
+    size_t num_params;
+    bool is_varargs;
+    private Address local_program_counter;
+    private UpvalueStack upvalue_stack = null;
 
-    this()
+    this(size_t num_params, bool is_varargs, Address local_program_counter)
     {
-        this.operand_stack = null;
-        this.call_stack = null;
-        this.code_stack = null;
-        this.environment_stack = null;
-        this.globals = null;
-        this.trace = null;
+        this.num_params = num_params;
+        this.is_varargs = is_varargs;
+        this.local_program_counter = local_program_counter;
     }
 
-    void runVM()
+    void setLocalPC(Address new_local_program_counter)
     {
-        while (codeRemains())
+        this.local_program_counter = new_local_program_counter;
+    }
+
+    Address getLocalPC() const
+    {
+        return this.local_program_counter;
+    }
+
+    void insertUpvalue(Upvalue upvalue)
+    {
+        this.upvalue_stack.push(upvalue);
+    }
+
+    Upvalue getUpvalue(size_t index) const
+    {
+        return this.upvalue_stack[index];
+    }
+
+    Upvalue popUpvalue()
+    {
+        return this.upvalue_stack.pop();
+    }
+
+    void executeClosure(Executor executor)
+    {
+        executor.runClosure(this);
+    }
+}
+
+struct Upvalue
+{
+    enum Kind
+    {
+        InStack,
+        SelfValued,
+    }
+
+    Kind kind;
+
+    union
+    {
+        Value* v_in_stack;
+        Value v_self_valued;
+    }
+
+    this(Value* v_in_stack)
+    {
+        this.kind = Kind.InStack;
+        this.v_in_stack = v_in_stack;
+    }
+
+    this(Value v_self_valued)
+    {
+        this.kind = Kind.SelfValued;
+        this.v_self_valued = v_self_valued;
+    }
+
+    static Upvalue newInStack(Value* v_in_stack)
+    {
+        return Upvalue(v_in_stack);
+    }
+
+    static Upvalue newSelfValued(Value v_self_valued)
+    {
+        return Upvalue(v_self_valued);
+    }
+
+    bool isInStack() const
+    {
+        return this.kind == Kind.InStack;
+    }
+
+    bool isSelfValued() const
+    {
+        return this.kind == Kind.SelfValued;
+    }
+
+}
+
+class Executor
+{
+    Address stack_pointer = 0, frame_pointer = 0, global_program_counter = 0;
+    Index locals_counter = 0, args_counter = 0;
+    private OperandStack operand_stack = null;
+    private CallStack call_stack = null;
+    private CodeStack code_stack = null;
+
+    void pushOperand(const Value new_operand)
+    {
+        this.operand_stack.push(new_operand);
+        this.stack_pointer++;
+    }
+
+    Value popOperand()
+    {
+        this.operand_stack[this.stack_pointer--];
+    }
+
+    Value topOperand() const
+    {
+        this.operand_stack[this.stack_pointer];
+    }
+
+    void pushCallFrame(const CallFrame new_call_frame)
+    {
+        this.call_stack.push(new_call_frame);
+    }
+
+    CallFrame popCallFrame()
+    {
+        return this.call_stack.pop();
+    }
+
+    CallFrame topCallFrame() const
+    {
+        return this.call_stack.top();
+    }
+
+    CallFrame* topCallFrameAsPointer() const
+    {
+        return this.call_stack.topAsPointer();
+    }
+
+    void pushCode(const Code new_code)
+    {
+        this.code_stack.push(new_code);
+    }
+
+    Code popCode()
+    {
+        return this.code_stack.pop();
+    }
+
+    Code topCode() const
+    {
+        return this.code_stack.top();
+    }
+
+    void setCodeStackCursorToPC()
+    {
+        this.call_stack.setCursor(this.global_program_counter);
+    }
+
+    void setUpCallFrame(Address call_address)
+    {
+        auto new_call_frame = CallFrame(this.locals_count, this.args_count,
+                this.stack_pointer, this.frame_pointer);
+        if (!this.call_stack.isEmpty())
         {
-            Instruction next_code = nextCodeInstruction();
+            auto previous_call_frame = topCallFrameAsPointer();
+            new_call_frame.setDynamicLink(previous_call_frame.getDynamicLink());
+        }
+        else
+            new_call_frame.setDynamicLink(call_address);
+        this.global_program_counter = call_address;
+        this.frame_pointer = this.stack_pointer - this.locals_count - this.args_count;
+        pushCallFrame(new_call_frame);
+        setCodeStackCursorToPC();
+    }
 
-            switch (next_code)
+    void clearUpCallFrame()
+    {
+        auto top_call_frame = popCallFrame();
+        this.stack_pointer = top_call_frame.getStaticLink();
+        this.global_program_counter = top_call_frame.getDynamicLink();
+        this.frame_pointer = top_call_frame.getFrameLink();
+    }
+
+    Value loadLocalAtOffset(Index offset) const
+    {
+        auto top_call_frame = topCallFrameAsPointer();
+        return this.operand_stack[this.frame_pointer + top_call_frame.num_locals + offset];
+    }
+
+    void storeLocalAtOffset(Index offset, Value value)
+    {
+        auto top_call_frame = topCallFrameAsPointer();
+        this.operand_stack[this.frame_pointer + top_call_frame.num_locals + offset];
+    }
+
+    Value loadGlobalAtOffset(Index offset)
+    {
+        return this.operand_stack[offset];
+    }
+
+    Value* loadGlobalAtOffsetAsPointer(Index offset)
+    {
+        return &this.operand_stack[offset];
+    }
+
+    void storeGlobalAtOffset(Index offset, Value value)
+    {
+        this.operand_stack[offset] = value;
+    }
+
+    Value loadNthArgument(Index offset) const
+    {
+        auto top_call_frame = topCallFrameAsPointer();
+        return this.operand_stack[this.frame_pointer
+            + top_call_frame.num_locals + top_call_frame.num_args + offset];
+    }
+
+    Value loadFromCodeTOS(Index offset) const
+    {
+        auto top_code = popCode();
+        assert(top_code.isValue());
+        return top_code.v_value;
+    }
+
+    Value loadFromCodeAtOffset(Index offset) const
+    {
+        assert(this.code_stack[offset].isValue());
+        return this.code_stack[offset].v_value;
+    }
+
+    Value loadConstantAtCallTOS(Index offset) const
+    {
+        auto top_call_frame = topCallFrameAsPointer();
+        return top_call_frame[offset];
+    }
+
+    void storeConstantAtCallTOS(Index offset, Value value)
+    {
+        auto top_call_frame = topCallFrameAsPointer();
+        top_call_frame[offset] = value;
+    }
+
+    Closure makeClosure(Index num_params, bool has_varargs)
+    {
+        return new Closure(num_params, has_varargs, this.global_program_counter);
+    }
+
+    void runClosure(ref Closure closure)
+    {
+        setUpCallFrame(closure.getLocalPC());
+        auto next_code = popCode();
+
+        while (!next_code.isEndClosureMarker())
+        {
+            if (next_code.isValue())
+                throw new StackVMError("Wrong code value at code stack TOS", null);
+
+            switch (next_code.v_instruction)
             {
             case Instruction.Add:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushNumber(lhs + rhs);
+                auto addendr = popOperand();
+                auto addendl = popOperand();
+                assert(addendr.isNumber() && addenl.isNumber());
+                pushOperand(Value.newNumber(addendl.v_number + addendr.v_number));
                 continue;
             case Instruction.Sub:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushNumber(lhs - rhs);
+                auto subtrahend = popOperand();
+                auto minued = popOperand();
+                assert(minued.isNumber() && subtrahend.isNumber());
+                pushOperand(Value.newNumber(minued.v_number - subtrahend.v_number));
                 continue;
             case Instruction.Mul:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushNumber(lhs * rhs);
+                auto multiplier = popOperand();
+                auto multiplicand = popOperand();
+                assert(multiplicand.isNumber() && multiplier.isNumber());
+                pushOperand(Value.newNumber(multiplicand.v_number * multiplier.v_number));
                 continue;
             case Instruction.Div:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushNumber(lhs / rhs);
+                auto divisor = popOperand();
+                auto dividend = popOperand();
+                assert(dividend.isNumber() && divisor.isNumber());
+                pushOperand(Value.newNumber(dividend.v_number / divisor.v_number));
+                continue;
+            case Instruction.IPow:
+                auto exponent = popOperand();
+                auto base = popOperand();
+                assert(base.isNumber() && exponent.isNumber());
+                pushOperand(Value.newNumber(base.v_number ^^ exponent.v_number));
+                continue;
+            case Instruction.FPow:
+                auto exponent = popOperand();
+                auto base = popOperand();
+                assert(base.isNumber() && exponent.isNumber());
+                pushOperand(Value.newNumber(pow(base.v_number, exponent.v_number)));
                 continue;
             case Instruction.Mod:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs % rhs);
+                auto divisor = popOperand();
+                auto dividend = popOperand();
+                assert(dividend.isNumber() && divisor.isNumber());
+                pushOperand(Value.newNumber(
+                        cast(ulong) dividend.v_number % cast(ulong) divisor.v_number));
                 continue;
-            case Instruction.Pow:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushNumber(pow(lhs, rhs));
+            case Instruction.TruncateReal:
+                auto truncatee = popOperand();
+                assert(truncatee.isNumber());
+                pushOperand(Value.newNumber(trunc(truncatee.v_number)));
                 continue;
-            case Instruction.Shr:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs >> rhs);
+            case Instruction.FloorReal:
+                auto flooree = popOperand();
+                assert(flooree.isNumber());
+                pushOperand(Value.newNumber(floor(flooree.v_number)));
                 continue;
-            case Instruction.Shl:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs << rhs);
-                continue;
-            case Instruction.Neg:
-                auto num = popNumber();
-                pushNumber(-num);
-                continue;
-            case Instruction.Conj:
-                auto rhs = popBoolean();
-                auto lhs = popBoolean();
-                pushBoolean(lhs && rhs);
-                continue;
-            case Instruction.Disj:
-                auto rhs = popBoolean();
-                auto lhs = popBoolean();
-                pushBoolean(lhs || rhs);
-                continue;
-            case Instruction.Not:
-                auto boolean = popBoolean();
-                pushBoolean(!boolean);
-                continue;
-            case Instruction.BitAnd:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs & rhs);
-                continue;
-            case Instruction.BitOr:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs | rhs);
-                continue;
-            case Instruction.BitXor:
-                ulong rhs = cast(ulong) popNumber();
-                ulong lhs = cast(ulong) popNumber();
-                pushNumber(lhs ^ rhs);
-                continue;
-            case Instruction.BitNot:
-                ulong num = cast(ulong) popNumber();
-                pushNumber(~num);
-                continue;
-            case Instruction.Gt:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushBoolean(lhs > rhs);
-                continue;
-            case Instruction.Ge:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushBoolean(lhs >= rhs);
-                continue;
-            case Instruction.Lt:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushBoolean(lhs < rhs);
-                continue;
-            case Instruction.Le:
-                auto rhs = popNumber();
-                auto lhs = popNumber();
-                pushBoolean(lhs <= rhs);
+            case Instruction.ConcatString:
+                auto concated = popOperand();
+                auto concatee = popOperand();
+                assert(concatee.isString() && concated.isString());
+                pushOperand(Value.newString(concatee.v_string ~ concated.v_string));
                 continue;
             case Instruction.Eq:
-                auto rhs = popData();
-                auto lhs = popData();
-                pushBoolean(lhs == rhs);
+                auto equated = popOperand();
+                auto equatee = popOperand();
+                pushOperand(Value.newBoolean(equatee == equated));
                 continue;
             case Instruction.Ne:
-                auto rhs = popData();
-                auto lhs = popData();
-                pushBoolean(lhs != rhs);
+                auto equated = popOperand();
+                auto equatee = popOperand();
+                pushOperand(Value.newBoolean(equatee != equated));
                 continue;
-            case Instruction.CatString:
-                auto rhs = popString();
-                auto lhs = popString();
-                pushString(lhs ~ rhs);
+            case Instruction.Gt:
+                auto compared = popOperand();
+                auto comparee = popOperand();
+                assert(comparee.isNumber() && compared.isNumber());
+                pushOperand(Value.newBoolean(compared.v_number > comparee.v_number));
                 continue;
-            case Instruction.StoreNil:
-                pushNil();
+            case Instruction.Ge:
+                auto compared = popOperand();
+                auto comparee = popOperand();
+                assert(comparee.isNumber() && compared.isNumber());
+                pushOperand(Value.newBoolean(compared.v_number >= comparee.v_number));
                 continue;
-            case Instruction.StoreBoolean:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.Boolean)
-                    throw new StackVMError("Expected Boolean value at PC", this.program_counter);
-                pushBoolean(value.v_boolean);
+            case Instruction.Lt:
+                auto compared = popOperand();
+                auto comparee = popOperand();
+                assert(comparee.isNumber() && compared.isNumber());
+                pushOperand(Value.newBoolean(compared.v_number < comparee.v_number));
                 continue;
-            case Instruction.StoreString:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.String)
-                    throw new StackVMError("Expected String value at PC", this.program_counter);
-                pushString(value.v_string);
+            case Instruction.Le:
+                auto compared = popOperand();
+                auto comparee = popOperand();
+                assert(comparee.isNumber() && compared.isNumber());
+                pushOperand(Value.newBoolean(compared.v_number <= comparee.v_number));
                 continue;
-            case Instruction.StoreNumber:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.Number)
-                    throw new StackVMError("Expected Number value at PC", this.program_counter);
-                pushString(value.v_string);
+            case Instruction.Conjunction:
+                auto conjunctee = popOperand();
+                auto conjuncted = popOperand();
+                assert(conjuncted.isBoolean() && conjunctee.isBoolean());
+                pushOperand(Value.newBoolean(conjuncted.v_boolean && conjuncted.v_boolean));
                 continue;
-            case Instruction.StoreAddress:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.Address)
-                    throw new StackVMError("Expected Address value at PC", this.program_counter);
-                pushAddress(value.v_address);
+            case Instruction.Disjunction:
+                auto disjunctee = popOperand();
+                auto disjuncted = popOperand();
+                assert(disjuncted.isBoolean() && disjunctee.isBoolean());
+                pushOperand(Value.newBoolean(disjuncted.v_boolean || disjunctee.v_boolean));
                 continue;
-            case Instruction.StoreIndex:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.Index)
-                    throw new StackVMError("Expected Index value at PC", this.program_counter);
-                pushIndex(value.v_index);
+            case Instruction.Not:
+                auto negated = popOperand();
+                assert(negated.isBoolean());
+                pushOperand(Value.newNumber(!negated.v_boolean));
                 continue;
-            case Instruction.StoreTable:
-                auto value = nextCodeValue();
-                if (value.kind != TValue.Kind.Table)
-                    throw new StackVMError("Expected Table value at PC", this.program_counter);
-                pushTable(value.v_table);
+            case Instruction.Negate:
+                auto complemented = popOperand();
+                assert(complemented.isNumber());
+                pushOperand(Value.newNumber(-complemented.v_number));
                 continue;
-            case Instruction.SetConstantAtTopFrame:
-                auto index = popIndex();
-                auto value = popData();
-                setConstantAtTopFrame(index, value);
+            case Instruction.BitwiseAnd:
+                auto right_op = popOperand();
+                auto left_op = popOperand();
+                assert(left_op.isNumber() && right_op.isNumber());
+                assert(left_op.v_number >= 0 && right_op.v_number >= 0);
+                pushOperand(Value.newNumber(
+                        (cast(ulong) left_op.v_number) & (cast(ulong) right_op.v_number)));
                 continue;
-            case Instruction.GetConstantAtTopFrame:
-                auto index = popIndex();
-                auto value = getConstantAtTopFrame(index);
-                pushData(value);
+            case Instruction.BitwiseOr:
+                auto right_op = popOperand();
+                auto left_op = popOperand();
+                assert(left_op.isNumber() && right_op.isNumber());
+                assert(left_op.v_number >= 0 && right_op.v_number >= 0);
+                pushOperand(Value.newNumber(
+                        (cast(ulong) left_op.v_number) | (cast(ulong) right_op.v_number)));
                 continue;
-            case Instruction.SetConstantAtGlobals:
-                auto index = popIndex();
-                auto value = popData();
-                setConstantAtGlobals(index, value);
+            case Instruction.BitwiseXor:
+                auto right_op = popOperand();
+                auto left_op = popOperand();
+                assert(left_op.isNumber() && right_op.isNumber());
+                assert(left_op.v_number >= 0 && right_op.v_number >= 0);
+                pushOperand(Value.newNumber(
+                        (cast(ulong) left_op.v_number) ^ (cast(ulong) right_op.v_number)));
                 continue;
-            case Instruction.GetConstantAtGlobals:
-                auto index = popIndex();
-                auto value = getConstantAtGlobals(index);
-                pushData(value);
+            case Instruction.BitwiseNot:
+                auto operand = popOperand();
+                assert(operand.isNumber());
+                assert(operand >= 0);
+                pushOperand(Value.newNumber(~(cast(ulong) operand.v_number)));
                 continue;
-            case Instruction.GetTableEntry:
-                auto key = popData();
-                auto table = popTable();
-                auto entry = table.getEntry(key);
-                if (entry.isNull)
-                    throw new StackVMError("No such index at table", this.stack_pointer);
-                pushData(entry.get.value);
+            case Instruction.BitwiseShiftRight:
+                auto bitnum = popOperand();
+                auto shiftee = popOperand();
+                assert(shiftee.isNumber() && bitnum.isNumber());
+                assert(shiftee.v_number >= 0 && (bitnum.v_number >= 1 && bitnum.v_number <= 64));
+                pushOperand(Value.newNumber(
+                        (cast(ulong) shiftee.v_number) >> (cast(ubyte) bitnum.v_number)));
                 continue;
-            case Instruction.InsertTableEntry:
-                auto key = popData();
-                auto value = popData();
-                auto table = popTable();
-                table.insertEntry(key, value);
-                pushTable(table);
+            case Instruction.BitwiseShiftLeft:
+                auto bitnum = popOperand();
+                auto shiftee = popOperand();
+                assert(shiftee.isNumber() && bitnum.isNumber());
+                assert(shiftee.v_number >= 0 && (bitnum.v_number >= 1 && bitnum.v_number <= 64));
+                pushOperand(Value.newNumber(
+                        (cast(ulong) shiftee.v_number) << (cast(ubyte) bitnum.v_number)));
                 continue;
-            case Instruction.SetTableEntry:
-                auto key = popData();
-                auto value = popData();
-                auto table = popTable();
-                if (!table.setEntry(key, value))
-                    throw new StackVMError("No such index at table", this.stack_pointer);
-                pushTable(table);
-                continue;
-            case Instruction.CheckTableEntry:
-                auto key = popData();
-                auto table = popTable();
-                pushBoolean(table.hasEntry(key));
-                continue;
-            case Instruction.DuplicateTop:
-                duplicateTopOfOperandStack();
-                continue;
-            case Instruction.SwapTop:
-                swapTopOfOperandStack();
-                continue;
-            case Instruction.OverTop:
-                overTopOfOperandStack();
-                continue;
-            case Instruction.RotateTop3:
-                rotateTop3OfOperandStack();
-                continue;
-            case Instruction.RotateTop4:
-                rotateTop4OfOperandStack();
-                continue;
-            case Instruction.Jump:
-                auto addr = popAddress();
-                setProgramCounter(addr);
-                continue;
-            case Instruction.JumpIfTrue:
-                auto addr = popAddress();
-                auto boolean = popBoolean();
-                if (boolean)
-                    setProgramCounter(addr);
-                continue;
-            case Instruction.JumpIfFalse:
-                auto addr = popAddress();
-                auto boolean = popBoolean();
-                if (!boolean)
-                    setProgramCounter(addr);
-                continue;
-            case Instruction.Call:
-                auto nargs = popIndex();
-                auto nlocals = popIndex();
-                setupNewCallFrame(nargs, nlocals);
-                continue;
-            case Instruction.CallConcurrently:
-                // todo
-                continue;
-            case Instruction.Return:
-                popCallStackAndClear();
-                continue;
-            case Instruction.GetArgument:
-                auto index = popIndex();
-                pushData(getArgument(index));
-                continue;
-            case Instruction.GetLocal:
-                auto index = popIndex();
-                pushData(getLocal(index));
+            case Instruction.LoadLocal:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushOperand(loadLocalAtOffset(index.v_index));
                 continue;
             case Instruction.StoreLocal:
-                auto index = popIndex();
-                auto data = popData();
-                setLocal(index, data);
+                auto index = popOperand();
+                auto value = popOperand();
+                assert(index.isIndex());
+                setLocalAtOffset(index.v_index, value);
+                continue;
+            case Instruction.LoadGlobal:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushOperand(loadGlobalAtOffset(index.v_index));
+                continue;
+            case Instruction.StoreGlobal:
+                auto index = popOperand();
+                auto value = popOperand();
+                assert(index.isIndex());
+                storeGlobalAtOffset(index.v_index, value);
+                continue;
+            case Instruction.LoadGlobalPointer:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushOperand(Value.newValuePointer(loadGlobalAtOffsetAsPointer(index.v_index)));
+                continue;
+            case Instruction.LoadGlobalAtCallTOS:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushOperand(loadGlobalAtCallTOS(index.v_index));
+                continue;
+            case Instruction.StoreGlobalAtCallTOS:
+                auto index = popOperand();
+                auto value = popOperand();
+                assert(index.isIndex());
+                storeGlobalAtCallTOS(index.v_index, value);
+                continue;
+            case Instruction.LoadNthArgument:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushOperand(loadNthArgument(index.v_index));
+                continue;
+            case Instruction.LoadFromCodeTOS:
+                auto value = loadFromCodeTOS();
+                pushValue(value);
+                continue;
+            case Instruction.LoadFromCodeAtOffset:
+                auto index = popOperand();
+                assert(index.isIndex());
+                pushValue(loadFromCodeAtOffset(index.v_index));
+                continue;
+            case Instruction.InsertIntoTable:
+                auto value = popOperand();
+                auto key = popOperand();
+                auto table = popOperand();
+                assert(table.isTable());
+                table.v_table.insertEntry(key, value);
+                pushOperand(table);
+                continue;
+            case Instruction.GetFromTable:
+                auto key = popOperand();
+                auto table = popOperand();
+                assert(table.isTable());
+                pushOperand(table.v_table.getEntry(key));
+                continue;
+            case Instruction.CheckIfTableHas:
+                auto key_in_question = popOperand();
+                auto table = popOperand();
+                assert(table.isTable());
+                pushOperand(Value.newBoolean(table.v_table.hasEntry(key_in_question)));
+                continue;
+            case Instruction.MakeClosure:
+                pushOperand(makeClosure());
+                continue;
+            case Instruction.CallClosure:
+                auto closure = popOperand();
+                assert(closure.isClosure());
+                closure.executeClosure();
+                continue;
+            case Instruction.ReturnFromClosure:
+                break;
+            case Instruction.StoreOuterUpvalue:
+                auto value_pointer = popOperand();
+                assert(value_pointer.isValuePointer());
+                closure.insertUpvalue(Upvalue.newInStack(value_pointer.v_value_pointer));
+                continue;
+            case Instruction.StoreLocalUpvalue:
+                auto value = popOperand();
+                closure.insertUpvalue(Upvalue.newSelfValued(value));
+                continue;
+            case Instruction.LoadUpvalueAtTOS:
+                auto upvalue = closure.popUpvalue();
+                if (upvalue.isInStack())
+                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
+                else
+                    pushOperand(upvalue.v_self_valued);
+                continue;
+            case Instruction.LoadUpvalueAtOffset:
+                auto index = popOperand();
+                assert(index.isIndex());
+                auto upvalue = closure.getUpvalue(index.v_index);
+                if (upvalue.isInStack())
+                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
+                else
+                    pushOperand(upvalue.v_self_valued);
+                continue;
+            case Instruction.Branch:
+                auto address = popOperand();
+                assert(address.isAddress());
+                closure.setLocalPC(address.v_address);
+                continue;
+            case Instruction.BranchIfTrue:
+                auto condition = popOperand();
+                auto address = popOperand();
+                assert(address.isAddress() && condition.isBoolean());
+                if (condition.v_boolean)
+                    closure.setLocalPC(address.v_address);
+                continue;
+            case Instruction.BranchIfFalse:
+                auto condition = popOperand();
+                auto address = popOperand();
+                assert(address.isAddress() && condition.isBoolean());
+                if (!condition.v_boolean)
+                    closure.setLocalPC(address.v_address);
                 continue;
             default:
-                continue;
+                break;
             }
-
         }
+
+        clearUpCallFrame();
     }
 }
