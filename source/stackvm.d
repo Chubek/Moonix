@@ -1,8 +1,6 @@
 module moonix.stackvm;
 
-import std.stdio, std.math, std.range, std.typecons, std.algorithm,
-    std.container, std.string, std.concurrency, std.process, std.variant,
-    core.memory, core.attribute, core.sync.barrier, core.sync.condition;
+import std.math, std.range, std.typecons, std.container;
 
 enum MAX_CONST = 256;
 enum STACK_GROWTH_RATE = 65536;
@@ -392,7 +390,7 @@ struct CallFrame
     private Address static_link;
     private Address frame_link;
     private Address dynamic_link = -1;
-    private ConstantPool constant_pool = null;
+    private ConstantPool constant_pool;
 
     this(Index num_args, Index num_locals, Address static_link, Address frame_link)
     {
@@ -466,7 +464,7 @@ struct Value
         Index v_index;
         Closure v_closure;
         Value* v_value_pointer;
-        UpavalueStack v_upvalue_stack;
+        UpvalueStack v_upvalue_stack;
     }
 
     this(Kind kind)
@@ -579,7 +577,7 @@ struct Value
         return Value(v_closure);
     }
 
-    static Value newValuePointer(ValuePointer* v_value_pointer)
+    static Value newValuePointer(Value* v_value_pointer)
     {
         return Value(v_value_pointer);
     }
@@ -680,7 +678,7 @@ class Closure
     size_t num_params;
     bool is_varargs;
     private Address local_program_counter;
-    private UpvalueStack upvalue_stack = null;
+    private UpvalueStack upvalue_stack;
 
     this(size_t num_params, bool is_varargs, Address local_program_counter,
             UpvalueStack upvalue_stack)
@@ -1224,3 +1222,4 @@ class Executor
         clearUpCallFrame();
     }
 }
+
