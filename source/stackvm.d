@@ -62,13 +62,12 @@ enum Instruction
     MakeClosure,
     CallClosure,
     ReturnFromClosure,
-    StoreOuterUpvalue,
-    StoreLocalUpvalue,
-    LoadUpvalueAtTOS,
-    LoadUpvalueAtOffset,
     Branch,
     BranchfIfTrueTOS,
     BranchIfFalseTOS,
+    InsertIntoUpvalueStack,
+    RetrieveFromUpvalueStack,
+    LoadUpvalueFromClosure,
 }
 
 class StackFlowError : Exception
@@ -452,6 +451,7 @@ struct Value
         Index,
         Closure,
         ValuePointer,
+        UpvalueStack,
     }
 
     Kind kind;
@@ -466,6 +466,7 @@ struct Value
         Index v_index;
         Closure v_closure;
         Value* v_value_pointer;
+        UpavalueStack v_upvalue_stack;
     }
 
     this(Kind kind)
@@ -527,6 +528,12 @@ struct Value
         this.v_value_pointer = v_value_pointer;
     }
 
+    this(UpvalueStack v_upvalue_stack)
+    {
+        this.kind = Kind.UpvalueStack;
+        this.v_upvalue_stack = v_upvalue_stack;
+    }
+
     static Value newNil()
     {
         return Value(Kind.Nil);
@@ -577,6 +584,11 @@ struct Value
         return Value(v_value_pointer);
     }
 
+    static Value newUpvalueStack(UpvalueStack v_upvalue_stack)
+    {
+        return Value(v_upvalue_stack);
+    }
+
     bool opEquals(const Value rhs) const
     {
         if (this.kind == rhs.kind)
@@ -603,6 +615,8 @@ struct Value
                 return this.v_closure == rhs.v_closure;
             case Kind.ValuePointer:
                 return this.v_value_pointer == rhs.v_value_pointer;
+            case Kind.UpvalueStack:
+                return this.v_upvalue_stack == rhs.v_upvalue_stack;
             default:
                 return false;
             }
@@ -654,6 +668,11 @@ struct Value
     {
         return this.kind == Kind.ValuePointer;
     }
+
+    bool isUpvalueStack() const
+    {
+        return this.kind == Kind.UpvalueStack;
+    }
 }
 
 class Closure
@@ -663,11 +682,13 @@ class Closure
     private Address local_program_counter;
     private UpvalueStack upvalue_stack = null;
 
-    this(size_t num_params, bool is_varargs, Address local_program_counter)
+    this(size_t num_params, bool is_varargs, Address local_program_counter,
+            UpvalueStack upvalue_stack)
     {
         this.num_params = num_params;
         this.is_varargs = is_varargs;
         this.local_program_counter = local_program_counter;
+        this.upvalue_stack = upvalue_stack;
     }
 
     void setLocalPC(Address new_local_program_counter)
@@ -680,19 +701,9 @@ class Closure
         return this.local_program_counter;
     }
 
-    void insertUpvalue(Upvalue upvalue)
-    {
-        this.upvalue_stack.push(upvalue);
-    }
-
-    Upvalue getUpvalue(size_t index) const
+    Upvalue getUpvalue(Index index)
     {
         return this.upvalue_stack[index];
-    }
-
-    Upvalue popUpvalue()
-    {
-        return this.upvalue_stack.pop();
     }
 
     void executeClosure(Executor executor)
@@ -701,7 +712,7 @@ class Closure
     }
 }
 
-struct Upvalue
+class Upvalue
 {
     enum Kind
     {
@@ -899,9 +910,9 @@ class Executor
         top_call_frame[offset] = value;
     }
 
-    Closure makeClosure(Index num_params, bool has_varargs)
+    Closure makeClosure(Index num_params, bool has_varargs, UpvalueStack upvalue_stack)
     {
-        return new Closure(num_params, has_varargs, this.global_program_counter);
+        return new Closure(num_params, has_varargs, this.global_program_counter, upvalue_stack);
     }
 
     void runClosure(ref Closure closure)
@@ -1150,7 +1161,13 @@ class Executor
                 pushOperand(Value.newBoolean(table.v_table.hasEntry(key_in_question)));
                 continue;
             case Instruction.MakeClosure:
-                pushOperand(makeClosure());
+                auto num_params = popOperand();
+                auto is_varargs = popOperand();
+                auto upvalue_stack = popOperand();
+                assert(num_params.isIndex() && is_varargs.isBoolean()
+                        && upvalue_stack.isUpvalueStack());
+                pushOperand(makeClosure(num_params.v_index,
+                        is_varargs.v_boolean, upvalue_stack.v_upvalue_stack));
                 continue;
             case Instruction.CallClosure:
                 auto closure = popOperand();
@@ -1159,31 +1176,6 @@ class Executor
                 continue;
             case Instruction.ReturnFromClosure:
                 break;
-            case Instruction.StoreOuterUpvalue:
-                auto value_pointer = popOperand();
-                assert(value_pointer.isValuePointer());
-                closure.insertUpvalue(Upvalue.newInStack(value_pointer.v_value_pointer));
-                continue;
-            case Instruction.StoreLocalUpvalue:
-                auto value = popOperand();
-                closure.insertUpvalue(Upvalue.newSelfValued(value));
-                continue;
-            case Instruction.LoadUpvalueAtTOS:
-                auto upvalue = closure.popUpvalue();
-                if (upvalue.isInStack())
-                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
-                else
-                    pushOperand(upvalue.v_self_valued);
-                continue;
-            case Instruction.LoadUpvalueAtOffset:
-                auto index = popOperand();
-                assert(index.isIndex());
-                auto upvalue = closure.getUpvalue(index.v_index);
-                if (upvalue.isInStack())
-                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
-                else
-                    pushOperand(upvalue.v_self_valued);
-                continue;
             case Instruction.Branch:
                 auto address = popOperand();
                 assert(address.isAddress());
@@ -1203,6 +1195,27 @@ class Executor
                 if (!condition.v_boolean)
                     closure.setLocalPC(address.v_address);
                 continue;
+            case Instruction.InsertIntoUpvalueStack:
+                auto upvalue_stack = popOperand();
+                auto value = popOperand();
+                assert(upvalue_stack.isUpvalueStack());
+                upvalue_stack.push(value);
+                pushOperand(upvalue_stack);
+                continue;
+            case Instruction.RetrieveFromUpvalueStack:
+                auto upvalue_stack = popOperand();
+                assert(upvalue_stack.isUpvalueStack());
+                auto value = upvalue_stack.pop();
+                pushOperand(value);
+                continue;
+            case Instruction.LoadUpvalueFromClosure:
+                auto index = popOperand();
+                assert(index.isIndex());
+                auto upvalue = closure.getUpvalue(index.v_index);
+                if (upvalue.isInStack())
+                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
+                else
+                    pushOperand(upvalue.v_self_valued);
             default:
                 break;
             }
