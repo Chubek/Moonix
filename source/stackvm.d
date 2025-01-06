@@ -3,7 +3,7 @@ module moonix.stackvm;
 import std.math, std.range, std.typecons, std.container;
 
 enum MAX_CONST = 256;
-enum STACK_GROWTH_RATE = 65536;
+enum STACK_GROWTH_RATE = 1024;
 enum DJB2_INIT = 5381;
 
 alias Address = long;
@@ -13,8 +13,6 @@ alias OperandStack = Stack!Value;
 alias CallStack = Stack!CallFrame;
 alias CodeStack = Stack!Code;
 alias UpvalueStack = Stack!Upvalue;
-alias TableEntries = SList!(Table.Entry);
-alias ConstantPool = Value[MAX_CONST];
 
 enum Instruction
 {
@@ -61,11 +59,8 @@ enum Instruction
     CallClosure,
     ReturnFromClosure,
     Branch,
-    BranchfIfTrueTOS,
-    BranchIfFalseTOS,
-    InsertIntoUpvalueStack,
-    RetrieveFromUpvalueStack,
-    LoadUpvalueFromClosure,
+    BranchIfTrue,
+    BranchIfFalse,
 }
 
 class StackFlowError : Exception
@@ -83,7 +78,7 @@ class StackFlowError : Exception
 class StackVMError : Exception
 {
     string msg;
-    Address address;
+    StackTrace trace;
 
     this(string msg, StackTrace trace)
     {
@@ -92,15 +87,232 @@ class StackVMError : Exception
     }
 }
 
+class StackTrace
+{
+    string msg;
+}
+
+struct Value
+{
+    enum Kind
+    {
+        Nil,
+        Boolean,
+        String,
+        Number,
+        Address,
+        Table,
+        Index,
+        Closure,
+        Upvalue,
+    }
+
+    Kind kind;
+
+    union
+    {
+        bool v_boolean;
+        string v_string;
+        real v_number;
+        Address v_address;
+        Table v_table;
+        Index v_index;
+        Closure v_closure;
+        Upvalue v_upvalue;
+    }
+
+    this(Kind kind)
+    {
+        this.kind = kind;
+    }
+
+    this(bool v_boolean)
+    {
+        this.kind = Kind.Boolean;
+        this.v_boolean = v_boolean;
+    }
+
+    this(string v_string)
+    {
+        this.kind = Kind.String;
+        this.v_string = v_string;
+    }
+
+    this(real v_number)
+    {
+        this.kind = Kind.Number;
+        this.v_number = v_number;
+    }
+
+    this(Address v_address)
+    {
+        this.kind = Kind.Address;
+        this.v_address = v_address;
+    }
+
+    this(Table v_table)
+    {
+        this.kind = Kind.Table;
+        this.v_table = v_table;
+    }
+
+    this(Index v_index)
+    {
+        this.kind = Kind.Index;
+        this.v_index = v_index;
+    }
+
+    this(Closure v_closure)
+    {
+        this.kind = Kind.Closure;
+        this.v_closure = v_closure;
+    }
+
+    this(Upvalue v_upvalue)
+    {
+        this.kind = Kind.Upvalue;
+        this.v_upvalue = v_upvalue;
+    }
+
+    static Value newNil()
+    {
+        return Value(Kind.Nil);
+    }
+
+    static Value newBoolean(bool v_boolean)
+    {
+        return Value(v_boolean);
+    }
+
+    static Value newString(string v_string)
+    {
+        return Value(v_string);
+    }
+
+    static Value newNumber(real v_number)
+    {
+        return Value(v_number);
+    }
+
+    static Value newNumber(ulong v_number)
+    {
+        return Value(v_number);
+    }
+
+    static Value newAddress(Address v_address)
+    {
+        return Value(v_address);
+    }
+
+    static Value newTable(Table v_table)
+    {
+        return Value(v_table);
+    }
+
+    static Value newIndex(Index v_index)
+    {
+        return Value(v_index);
+    }
+
+    static Value newClosure(Closure v_closure)
+    {
+        return Value(v_closure);
+    }
+
+    static Value newUpvalue(Upvalue v_upvalue)
+    {
+        return Value(v_upvalue);
+    }
+
+    bool opEquals(const Value rhs) const
+    {
+        if (this.kind == rhs.kind)
+        {
+            switch (this.kind)
+            {
+            case Kind.Nil:
+                return true;
+            case Kind.Boolean:
+                return this.v_boolean == rhs.v_boolean;
+            case Kind.String:
+                return this.v_string == rhs.v_string;
+            case Kind.Number:
+                return this.v_number == rhs.v_number;
+            case Kind.Address:
+                return this.v_address == rhs.v_address;
+            case Kind.Table:
+                return this.v_table == rhs.v_table;
+            case Kind.Index:
+                return this.v_index == rhs.v_index;
+            case Kind.Closure:
+                return this.v_closure == rhs.v_closure;
+            case Kind.Upvalue:
+                return this.v_upvalue == rhs.v_upvalue;
+            default:
+                return false;
+            }
+        }
+        return false;
+    }
+
+    bool isNil() const
+    {
+        return this.kind == Kind.Nil;
+    }
+
+    bool isBoolean() const
+    {
+        return this.kind == Kind.Boolean;
+    }
+
+    bool isNumber() const
+    {
+        return this.kind == Kind.Number;
+    }
+
+    bool isString() const
+    {
+        return this.kind == Kind.String;
+    }
+
+    bool isAddress() const
+    {
+        return this.kind == Kind.Address;
+    }
+
+    bool isIndex() const
+    {
+        return this.kind == Kind.Index;
+    }
+
+    bool isTable() const
+    {
+        return this.kind == Kind.Table;
+    }
+
+    bool isClosure() const
+    {
+        return this.kind == Kind.Closure;
+    }
+
+    bool isUpvalue() const
+    {
+        return this.kind == Kind.Upvalue;
+    }
+}
+
 struct Stack(T)
 {
-    private T[] container = new T[STACK_GROWTH_RATE];
-    private size_t cursor = 0;
-    private size_t length = STACK_GROWTH_RATE;
-    private string name = null;
+    private T[] container;
+    private size_t cursor;
+    private size_t length;
+    private string name;
 
     this(string name)
     {
+        this.container = new T[STACK_GROWTH_RATE];
+        this.cursor = 0;
+        this.length = STACK_GROWTH_RATE;
         this.name = name;
     }
 
@@ -149,14 +361,19 @@ struct Stack(T)
 
     T* topAsPointer() const
     {
-        return &this.container[this.cursor - 1];
+        return cast(T*)&this.container[this.cursor - 1];
+    }
+
+    T* offsetAsPointer(Index offset)
+    {
+        return cast(T*)&this.container[offset];
     }
 
     T opIndex(const size_t key) const
     {
         if (key >= this.cursor)
             throw new StackFlowError("The " ~ this.name ~ " stack overflew", key);
-        return this.container[key];
+        return cast(T) this.container[key];
     }
 
     void opIndexAssign(const T value, const size_t key)
@@ -193,132 +410,6 @@ struct Stack(T)
     size_t getLength() const
     {
         return this.length;
-    }
-}
-
-class Table
-{
-    struct Entry
-    {
-        Value key;
-        Value value;
-
-        this(Value key, Value value)
-        {
-            this.key = key;
-            this.value = value;
-        }
-
-        bool opEquals(const Entry rhs) const
-        {
-            return this.key == rhs.key && this.value == rhs.value;
-        }
-    }
-
-    TableEntries entries = null;
-    size_t count = 0;
-
-    void insertEntry(Value key, Value value)
-    {
-        this.entries.insertFront(Entry(key, value));
-        this.count++;
-    }
-
-    bool setEntry(Value key, Value value)
-    {
-        foreach (ref entry; this.entries[])
-        {
-            if (entry.key == key)
-            {
-                entry.value = value;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool hasEntry(Value key)
-    {
-        foreach (entry; this.entries[])
-            if (entry.key == key)
-                return true;
-        return false;
-    }
-
-    Nullable!Entry getEntry(Value key)
-    {
-        Nullable!Entry found;
-        foreach (entry; this.entries[])
-        {
-            if (entry.key == key)
-            {
-                found = entry;
-                break;
-            }
-        }
-        return found;
-    }
-
-    void iter(F)(F fn)
-    {
-        foreach (entry; this.entries[])
-            fn(entry);
-    }
-
-    Entry[] map(F)(F fn)
-    {
-        Entry[] acc = null;
-        foreach (entry; this.entries[])
-            acc ~= fn(entry);
-        return acc;
-    }
-
-    Entry[] fold(F)(F fn, Entry[] init)
-    {
-        foreach (entry; this.entries[])
-            init ~= fn(entry);
-        return init;
-    }
-
-    Entry[] filter(F)(F cond)
-    {
-        Entry[] filtered = null;
-        foreach (entry; this.entries[])
-            if (cond(entry))
-                filtered ~= entry;
-        return filtered;
-    }
-
-    void concat(Entry[] elts)
-    {
-        foreach (elt; elts)
-            this.entries.insertFront(elt);
-    }
-
-    void cons(Entry elt)
-    {
-        this.entries.insertFront(elt);
-    }
-
-    Entry[] reverse()
-    {
-        Entry[] reverse = null;
-        foreach (entry; this.entries.reverse()[])
-            reverse ~= entry;
-        return reverse;
-    }
-
-    Entry head()
-    {
-        return this.entries.front();
-    }
-
-    Entry[] tail()
-    {
-        Entry[] tail = null;
-        foreach (entry; this.entries[])
-            tail ~= entry;
-        return tail[1 .. $];
     }
 }
 
@@ -378,18 +469,20 @@ struct Code
         return this.kind == Kind.Value;
     }
 
-    bool isEndClosureMarker() const
+    bool isEndClosureMarker()
     {
-        return this.kind = Kind.EndClosureMarker;
+        return this.kind == Kind.EndClosureMarker;
     }
 }
 
 struct CallFrame
 {
+    alias ConstantPool = Value[MAX_CONST];
+
     Index num_args, num_locals;
     private Address static_link;
     private Address frame_link;
-    private Address dynamic_link = -1;
+    private Address dynamic_link;
     private ConstantPool constant_pool;
 
     this(Index num_args, Index num_locals, Address static_link, Address frame_link)
@@ -397,6 +490,7 @@ struct CallFrame
         this.num_args = num_args;
         this.num_locals = num_locals;
         this.static_link = static_link;
+        this.dynamic_link = -1;
         this.frame_link = frame_link;
     }
 
@@ -425,251 +519,85 @@ struct CallFrame
         return this.dynamic_link == -1;
     }
 
-    Value opIndex(const size_t index) const
+    Value opIndex(size_t index) const
     {
         return this.constant_pool[index];
     }
 
-    void opIndexAssign(const size_t index, const Value value)
+    void opIndexAssign(const Value value, size_t index)
     {
         this.constant_pool[index] = value;
     }
 }
 
-struct Value
+class Table
 {
-    enum Kind
+    struct Entry
     {
-        Nil,
-        Boolean,
-        String,
-        Number,
-        Address,
-        Table,
-        Index,
-        Closure,
-        ValuePointer,
-        UpvalueStack,
-    }
+        Value key;
+        Value value;
 
-    Kind kind;
-
-    union
-    {
-        bool v_boolean;
-        string v_string;
-        real v_number;
-        Address v_address;
-        Table v_table;
-        Index v_index;
-        Closure v_closure;
-        Value* v_value_pointer;
-        UpvalueStack v_upvalue_stack;
-    }
-
-    this(Kind kind)
-    {
-        this.kind = kind;
-    }
-
-    this(bool v_boolean)
-    {
-        this.kind = Kind.Boolean;
-        this.v_boolean = v_boolean;
-    }
-
-    this(string v_string)
-    {
-        this.kind = Kind.String;
-        this.v_string = v_string;
-    }
-
-    this(real v_number)
-    {
-        this.kind = Kind.Number;
-        this.v_number = v_number;
-    }
-
-    this(ulong v_number)
-    {
-        this.kind = Kind.Number;
-        this.v_number = cast(real) v_number;
-    }
-
-    this(Address v_address)
-    {
-        this.kind = Kind.Address;
-        this.v_address = v_address;
-    }
-
-    this(Table v_table)
-    {
-        this.kind = Kind.Table;
-        this.v_table = v_table;
-    }
-
-    this(Index v_index)
-    {
-        this.kind = Kind.Index;
-        this.v_index = v_index;
-    }
-
-    this(Closure v_closure)
-    {
-        this.kind = Kind.Closure;
-        this.v_closure = v_closure;
-    }
-
-    this(Value* v_value_pointer)
-    {
-        this.kind = Kind.ValuePointer;
-        this.v_value_pointer = v_value_pointer;
-    }
-
-    this(UpvalueStack v_upvalue_stack)
-    {
-        this.kind = Kind.UpvalueStack;
-        this.v_upvalue_stack = v_upvalue_stack;
-    }
-
-    static Value newNil()
-    {
-        return Value(Kind.Nil);
-    }
-
-    static Value newBoolean(bool v_boolean)
-    {
-        return Value(v_boolean);
-    }
-
-    static Value newString(string v_string)
-    {
-        return Value(v_string);
-    }
-
-    static Value newNumber(real v_number)
-    {
-        return Value(v_number);
-    }
-
-    static Value newNumber(ulong v_number)
-    {
-        return Value(v_number);
-    }
-
-    static Value newAddress(Address v_address)
-    {
-        return Value(v_address);
-    }
-
-    static Value newTable(Table v_table)
-    {
-        return Value(v_table);
-    }
-
-    static Value newIndex(Index v_index)
-    {
-        return Value(v_index);
-    }
-
-    static Value newClosure(Closure v_closure)
-    {
-        return Value(v_closure);
-    }
-
-    static Value newValuePointer(Value* v_value_pointer)
-    {
-        return Value(v_value_pointer);
-    }
-
-    static Value newUpvalueStack(UpvalueStack v_upvalue_stack)
-    {
-        return Value(v_upvalue_stack);
-    }
-
-    bool opEquals(const Value rhs) const
-    {
-        if (this.kind == rhs.kind)
+        this(Value key, Value value)
         {
-            switch (this.kind)
+            this.key = key;
+            this.value = value;
+        }
+
+        bool opEquals(const Entry rhs) const
+        {
+            return this.key == rhs.key && this.value == rhs.value;
+        }
+    }
+
+    alias TableEntries = SList!Entry;
+
+    TableEntries entries;
+    size_t count;
+
+    this()
+    {
+        this.count = 0;
+    }
+
+    void insertEntry(Value key, Value value)
+    {
+        this.entries.insertFront(Entry(key, value));
+        this.count++;
+    }
+
+    bool setEntry(Value key, Value value)
+    {
+        foreach (ref entry; this.entries[])
+        {
+            if (entry.key == key)
             {
-            case Kind.Nil:
+                entry.value = value;
                 return true;
-            case Kind.Boolean:
-                return this.v_boolean == rhs.v_boolean;
-            case Kind.String:
-                return this.v_string == rhs.v_string;
-            case Kind.Number:
-                return this.v_number == rhs.v_number;
-            case Kind.Address:
-                return this.v_address == rhs.v_address;
-            case Kind.Table:
-                return this.v_table == rhs.v_table;
-            case Kind.Index:
-                return this.v_index == rhs.v_index;
-            case Kind.Identifier:
-                return this.v_identifier == rhs.v_identifier;
-            case Kind.Closure:
-                return this.v_closure == rhs.v_closure;
-            case Kind.ValuePointer:
-                return this.v_value_pointer == rhs.v_value_pointer;
-            case Kind.UpvalueStack:
-                return this.v_upvalue_stack == rhs.v_upvalue_stack;
-            default:
-                return false;
             }
         }
         return false;
     }
 
-    bool isNil() const
+    bool hasEntry(Value key)
     {
-        return this.kind == Kind.Nil;
+        foreach (entry; this.entries[])
+            if (entry.key == key)
+                return true;
+        return false;
     }
 
-    bool isBoolean() const
+    Nullable!Entry getEntry(Value key)
     {
-        return this.kind == Kind.Boolean;
-    }
-
-    bool isNumber() const
-    {
-        return this.kind == Kind.Number;
-    }
-
-    bool isString() const
-    {
-        return this.kind == Kind.String;
-    }
-
-    bool isAddress() const
-    {
-        return this.kind == Kind.Address;
-    }
-
-    bool isIndex() const
-    {
-        return this.kind == Kind.Index;
-    }
-
-    bool isTable() const
-    {
-        return this.kind == Kind.Table;
-    }
-
-    bool isClosure() const
-    {
-        return this.kind == Kind.Closure;
-    }
-
-    bool isValuePointer() const
-    {
-        return this.kind == Kind.ValuePointer;
-    }
-
-    bool isUpvalueStack() const
-    {
-        return this.kind == Kind.UpvalueStack;
+        Nullable!Entry found;
+        foreach (entry; this.entries[])
+        {
+            if (entry.key == key)
+            {
+                found = entry;
+                break;
+            }
+        }
+        return found;
     }
 }
 
@@ -680,13 +608,11 @@ class Closure
     private Address local_program_counter;
     private UpvalueStack upvalue_stack;
 
-    this(size_t num_params, bool is_varargs, Address local_program_counter,
-            UpvalueStack upvalue_stack)
+    this(size_t num_params, bool is_varargs, Address local_program_counter)
     {
         this.num_params = num_params;
         this.is_varargs = is_varargs;
         this.local_program_counter = local_program_counter;
-        this.upvalue_stack = upvalue_stack;
     }
 
     void setLocalPC(Address new_local_program_counter)
@@ -697,6 +623,11 @@ class Closure
     Address getLocalPC() const
     {
         return this.local_program_counter;
+    }
+
+    void insertUpvalue(Upvalue upvalue)
+    {
+        this.upvalue_stack.insert(upvalue);
     }
 
     Upvalue getUpvalue(Index index)
@@ -710,52 +641,20 @@ class Closure
     }
 }
 
-class Upvalue
+struct Upvalue
 {
-    enum Kind
+    Value* value;
+    bool is_closed;
+
+    this(Value* value)
     {
-        InStack,
-        SelfValued,
+        this.value = value;
+        this.is_closed = false;
     }
 
-    Kind kind;
-
-    union
+    void closeDown()
     {
-        Value* v_in_stack;
-        Value v_self_valued;
-    }
-
-    this(Value* v_in_stack)
-    {
-        this.kind = Kind.InStack;
-        this.v_in_stack = v_in_stack;
-    }
-
-    this(Value v_self_valued)
-    {
-        this.kind = Kind.SelfValued;
-        this.v_self_valued = v_self_valued;
-    }
-
-    static Upvalue newInStack(Value* v_in_stack)
-    {
-        return Upvalue(v_in_stack);
-    }
-
-    static Upvalue newSelfValued(Value v_self_valued)
-    {
-        return Upvalue(v_self_valued);
-    }
-
-    bool isInStack() const
-    {
-        return this.kind == Kind.InStack;
-    }
-
-    bool isSelfValued() const
-    {
-        return this.kind == Kind.SelfValued;
+        this.is_closed = true;
     }
 
 }
@@ -763,10 +662,11 @@ class Upvalue
 class Executor
 {
     Address stack_pointer = 0, frame_pointer = 0, global_program_counter = 0;
-    Index locals_counter = 0, args_counter = 0;
+    Index locals_count = 0, args_count = 0;
     private OperandStack operand_stack = null;
     private CallStack call_stack = null;
     private CodeStack code_stack = null;
+    private CodeStack local_code_stack = null;
 
     void pushOperand(const Value new_operand)
     {
@@ -776,12 +676,7 @@ class Executor
 
     Value popOperand()
     {
-        this.operand_stack[this.stack_pointer--];
-    }
-
-    Value topOperand() const
-    {
-        this.operand_stack[this.stack_pointer];
+        return this.operand_stack[this.stack_pointer--];
     }
 
     void pushCallFrame(const CallFrame new_call_frame)
@@ -847,6 +742,7 @@ class Executor
         this.stack_pointer = top_call_frame.getStaticLink();
         this.global_program_counter = top_call_frame.getDynamicLink();
         this.frame_pointer = top_call_frame.getFrameLink();
+        setCodeStackCursorToPC();
     }
 
     Value loadLocalAtOffset(Index offset) const
@@ -858,7 +754,7 @@ class Executor
     void storeLocalAtOffset(Index offset, Value value)
     {
         auto top_call_frame = topCallFrameAsPointer();
-        this.operand_stack[this.frame_pointer + top_call_frame.num_locals + offset];
+        this.operand_stack[this.frame_pointer + top_call_frame.num_locals + offset] = value;
     }
 
     Value loadGlobalAtOffset(Index offset)
@@ -868,7 +764,7 @@ class Executor
 
     Value* loadGlobalAtOffsetAsPointer(Index offset)
     {
-        return &this.operand_stack[offset];
+        return this.operand_stack.offsetAsPointer(offset);
     }
 
     void storeGlobalAtOffset(Index offset, Value value)
@@ -883,7 +779,7 @@ class Executor
             + top_call_frame.num_locals + top_call_frame.num_args + offset];
     }
 
-    Value loadFromCodeTOS(Index offset) const
+    Value loadFromCodeTOS()
     {
         auto top_code = popCode();
         assert(top_code.isValue());
@@ -896,24 +792,24 @@ class Executor
         return this.code_stack[offset].v_value;
     }
 
-    Value loadConstantAtCallTOS(Index offset) const
+    Value loadConstantAtCallTOS(Index offset)
     {
-        auto top_call_frame = topCallFrameAsPointer();
+        auto top_call_frame = *topCallFrameAsPointer();
         return top_call_frame[offset];
     }
 
     void storeConstantAtCallTOS(Index offset, Value value)
     {
-        auto top_call_frame = topCallFrameAsPointer();
+        auto top_call_frame = *topCallFrameAsPointer();
         top_call_frame[offset] = value;
     }
 
-    Closure makeClosure(Index num_params, bool has_varargs, UpvalueStack upvalue_stack)
+    Closure makeClosure(Index num_params, bool has_varargs)
     {
-        return new Closure(num_params, has_varargs, this.global_program_counter, upvalue_stack);
+        return new Closure(num_params, has_varargs, this.global_program_counter);
     }
 
-    void runClosure(ref Closure closure)
+    void runClosure(Closure closure)
     {
         setUpCallFrame(closure.getLocalPC());
         auto next_code = popCode();
@@ -928,7 +824,7 @@ class Executor
             case Instruction.Add:
                 auto addendr = popOperand();
                 auto addendl = popOperand();
-                assert(addendr.isNumber() && addenl.isNumber());
+                assert(addendr.isNumber() && addendl.isNumber());
                 pushOperand(Value.newNumber(addendl.v_number + addendr.v_number));
                 continue;
             case Instruction.Sub:
@@ -1067,7 +963,7 @@ class Executor
             case Instruction.BitwiseNot:
                 auto operand = popOperand();
                 assert(operand.isNumber());
-                assert(operand >= 0);
+                assert(operand.v_number >= 0);
                 pushOperand(Value.newNumber(~(cast(ulong) operand.v_number)));
                 continue;
             case Instruction.BitwiseShiftRight:
@@ -1095,7 +991,7 @@ class Executor
                 auto index = popOperand();
                 auto value = popOperand();
                 assert(index.isIndex());
-                setLocalAtOffset(index.v_index, value);
+                storeLocalAtOffset(index.v_index, value);
                 continue;
             case Instruction.LoadGlobal:
                 auto index = popOperand();
@@ -1113,16 +1009,16 @@ class Executor
                 assert(index.isIndex());
                 pushOperand(Value.newValuePointer(loadGlobalAtOffsetAsPointer(index.v_index)));
                 continue;
-            case Instruction.LoadGlobalAtCallTOS:
+            case Instruction.LoadConstantAtCallTOS:
                 auto index = popOperand();
                 assert(index.isIndex());
-                pushOperand(loadGlobalAtCallTOS(index.v_index));
+                pushOperand(loadConstantAtCallTOS(index.v_index));
                 continue;
-            case Instruction.StoreGlobalAtCallTOS:
+            case Instruction.StoreConstantAtCallTOS:
                 auto index = popOperand();
                 auto value = popOperand();
                 assert(index.isIndex());
-                storeGlobalAtCallTOS(index.v_index, value);
+                storeConstantAtCallTOS(index.v_index, value);
                 continue;
             case Instruction.LoadNthArgument:
                 auto index = popOperand();
@@ -1131,12 +1027,12 @@ class Executor
                 continue;
             case Instruction.LoadFromCodeTOS:
                 auto value = loadFromCodeTOS();
-                pushValue(value);
+                pushOperand(value);
                 continue;
             case Instruction.LoadFromCodeAtOffset:
                 auto index = popOperand();
                 assert(index.isIndex());
-                pushValue(loadFromCodeAtOffset(index.v_index));
+                pushOperand(loadFromCodeAtOffset(index.v_index));
                 continue;
             case Instruction.InsertIntoTable:
                 auto value = popOperand();
@@ -1150,7 +1046,10 @@ class Executor
                 auto key = popOperand();
                 auto table = popOperand();
                 assert(table.isTable());
-                pushOperand(table.v_table.getEntry(key));
+                auto entry = table.v_table.getEntry(key);
+                if (entry.isNull)
+                    throw new StackVMError("Table entry does not exist", null);
+                pushOperand(entry.get.value);
                 continue;
             case Instruction.CheckIfTableHas:
                 auto key_in_question = popOperand();
@@ -1164,13 +1063,13 @@ class Executor
                 auto upvalue_stack = popOperand();
                 assert(num_params.isIndex() && is_varargs.isBoolean()
                         && upvalue_stack.isUpvalueStack());
-                pushOperand(makeClosure(num_params.v_index,
-                        is_varargs.v_boolean, upvalue_stack.v_upvalue_stack));
+                pushOperand(Value.newClosure(makeClosure(num_params.v_index,
+                        is_varargs.v_boolean, upvalue_stack.v_upvalue_stack)));
                 continue;
             case Instruction.CallClosure:
-                auto closure = popOperand();
-                assert(closure.isClosure());
-                closure.executeClosure();
+                auto closure_to_call = popOperand();
+                assert(closure_to_call.isClosure());
+                closure_to_call.v_closure.executeClosure(this);
                 continue;
             case Instruction.ReturnFromClosure:
                 break;
@@ -1193,27 +1092,18 @@ class Executor
                 if (!condition.v_boolean)
                     closure.setLocalPC(address.v_address);
                 continue;
-            case Instruction.InsertIntoUpvalueStack:
-                auto upvalue_stack = popOperand();
-                auto value = popOperand();
-                assert(upvalue_stack.isUpvalueStack());
-                upvalue_stack.push(value);
-                pushOperand(upvalue_stack);
+            case Instruction.LoadUpvalue:
+                auto index = popOperand();
+                assert(index.isIndex());
+                auto value_pointer = loadGlobatAtOffsetAsPointer(index.v_index);
+                closure.insertUpvalue(Upvalue(value_pointer));
                 continue;
-            case Instruction.RetrieveFromUpvalueStack:
-                auto upvalue_stack = popOperand();
-                assert(upvalue_stack.isUpvalueStack());
-                auto value = upvalue_stack.pop();
-                pushOperand(value);
-                continue;
-            case Instruction.LoadUpvalueFromClosure:
+            case Instruction.StoreUpvalue:
                 auto index = popOperand();
                 assert(index.isIndex());
                 auto upvalue = closure.getUpvalue(index.v_index);
-                if (upvalue.isInStack())
-                    pushOperand(Value.newValuePointer(upvalue.v_in_stack));
-                else
-                    pushOperand(upvalue.v_self_valued);
+                pushOperand(Value.newUpvalue(upvalue));
+                continue;
             default:
                 break;
             }
@@ -1222,4 +1112,3 @@ class Executor
         clearUpCallFrame();
     }
 }
-
