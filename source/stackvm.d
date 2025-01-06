@@ -521,6 +521,11 @@ struct CallFrame
         return this.dynamic_link == -1;
     }
 
+    void storeConstant(Index index, Value value)
+    {
+        this.constant_pool[index] = value;
+    }
+
     Value opIndex(size_t index) const
     {
         return this.constant_pool[index];
@@ -635,11 +640,6 @@ class Closure
     Upvalue getUpvalue(Index index)
     {
         return this.upvalue_stack[index];
-    }
-
-    void executeClosure(Executor executor)
-    {
-        executor.runClosure(this);
     }
 }
 
@@ -807,8 +807,8 @@ class Executor
 
     void storeConstantAtCallTOS(Index offset, Value value)
     {
-        auto top_call_frame = *topCallFrameAsPointer();
-        top_call_frame[offset] = value;
+        auto top_call_frame = topCallFrameAsPointer();
+        top_call_frame.storeConstant(offset, value);
     }
 
     Closure makeClosure(Index num_params, bool has_varargs)
@@ -1073,7 +1073,7 @@ class Executor
             case Instruction.CallClosure:
                 auto closure_to_call = popOperand();
                 assert(closure_to_call.isClosure());
-                closure_to_call.v_closure.executeClosure(this);
+                runClosure(closure_to_call.v_closure);
                 continue;
             case Instruction.ReturnFromClosure:
                 break;
@@ -1114,5 +1114,12 @@ class Executor
         }
 
         clearUpCallFrame();
+    }
+
+    void runVM()
+    {
+        auto entrypoint = popOperand();
+        assert(entrypoint.isClosure());
+        runClosure(entrypoint.v_closure);
     }
 }
