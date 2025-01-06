@@ -61,6 +61,8 @@ enum Instruction
     Branch,
     BranchIfTrue,
     BranchIfFalse,
+    LoadUpvalue,
+    StoreUpvalue,
 }
 
 class StackFlowError : Exception
@@ -104,7 +106,7 @@ struct Value
         Table,
         Index,
         Closure,
-        Upvalue,
+        ValuePointer,
     }
 
     Kind kind;
@@ -118,7 +120,7 @@ struct Value
         Table v_table;
         Index v_index;
         Closure v_closure;
-        Upvalue v_upvalue;
+        Value* v_value_pointer;
     }
 
     this(Kind kind)
@@ -168,10 +170,10 @@ struct Value
         this.v_closure = v_closure;
     }
 
-    this(Upvalue v_upvalue)
+    this(Value* v_value_pointer)
     {
-        this.kind = Kind.Upvalue;
-        this.v_upvalue = v_upvalue;
+        this.kind = Kind.ValuePointer;
+        this.v_value_pointer = v_value_pointer;
     }
 
     static Value newNil()
@@ -219,9 +221,9 @@ struct Value
         return Value(v_closure);
     }
 
-    static Value newUpvalue(Upvalue v_upvalue)
+    static Value newValuePointer(Value* v_value_pointer)
     {
-        return Value(v_upvalue);
+        return Value(v_value_pointer);
     }
 
     bool opEquals(const Value rhs) const
@@ -246,8 +248,8 @@ struct Value
                 return this.v_index == rhs.v_index;
             case Kind.Closure:
                 return this.v_closure == rhs.v_closure;
-            case Kind.Upvalue:
-                return this.v_upvalue == rhs.v_upvalue;
+            case Kind.ValuePointer:
+                return this.v_value_pointer == rhs.v_value_pointer;
             default:
                 return false;
             }
@@ -295,9 +297,9 @@ struct Value
         return this.kind == Kind.Closure;
     }
 
-    bool isUpvalue() const
+    bool isValuePointer() const
     {
-        return this.kind == Kind.Upvalue;
+        return this.kind == Kind.ValuePointer;
     }
 }
 
@@ -347,7 +349,7 @@ struct Stack(T)
         Nullable!T front;
         if (!this.cursor)
             throw new StackFlowError("The " ~ this.name ~ " stack undeflew", this.cursor);
-        front = this.container[this.cursor - 1];
+        front = cast(T) this.container[this.cursor - 1];
         return front;
     }
 
@@ -356,7 +358,7 @@ struct Stack(T)
         auto front_nullable = topSafe();
         if (front_nullable.isNull)
             throw new StackFlowError("The " ~ this.name ~ " stack underflew", this.cursor);
-        return front_nullable.get;
+        return cast(T) front_nullable.get;
     }
 
     T* topAsPointer() const
@@ -376,7 +378,7 @@ struct Stack(T)
         return cast(T) this.container[key];
     }
 
-    void opIndexAssign(const T value, const size_t key)
+    void opIndexAssign(T value, const size_t key)
     {
         if (key >= this.cursor)
             throw new StackFlowError("The " ~ this.name ~ " stack overflew", key);
@@ -397,7 +399,7 @@ struct Stack(T)
         return slice;
     }
 
-    Address getCursor() const
+    Address getCursor()
     {
         return this.cursor;
     }
@@ -627,7 +629,7 @@ class Closure
 
     void insertUpvalue(Upvalue upvalue)
     {
-        this.upvalue_stack.insert(upvalue);
+        this.upvalue_stack.push(upvalue);
     }
 
     Upvalue getUpvalue(Index index)
@@ -655,6 +657,11 @@ struct Upvalue
     void closeDown()
     {
         this.is_closed = true;
+    }
+
+    Value* getValuePointer()
+    {
+        return this.value;
     }
 
 }
@@ -1060,11 +1067,8 @@ class Executor
             case Instruction.MakeClosure:
                 auto num_params = popOperand();
                 auto is_varargs = popOperand();
-                auto upvalue_stack = popOperand();
-                assert(num_params.isIndex() && is_varargs.isBoolean()
-                        && upvalue_stack.isUpvalueStack());
-                pushOperand(Value.newClosure(makeClosure(num_params.v_index,
-                        is_varargs.v_boolean, upvalue_stack.v_upvalue_stack)));
+                assert(num_params.isIndex() && is_varargs.isBoolean());
+                pushOperand(Value.newClosure(makeClosure(num_params.v_index, is_varargs.v_boolean)));
                 continue;
             case Instruction.CallClosure:
                 auto closure_to_call = popOperand();
@@ -1095,14 +1099,14 @@ class Executor
             case Instruction.LoadUpvalue:
                 auto index = popOperand();
                 assert(index.isIndex());
-                auto value_pointer = loadGlobatAtOffsetAsPointer(index.v_index);
+                auto value_pointer = loadGlobalAtOffsetAsPointer(index.v_index);
                 closure.insertUpvalue(Upvalue(value_pointer));
                 continue;
             case Instruction.StoreUpvalue:
                 auto index = popOperand();
                 assert(index.isIndex());
                 auto upvalue = closure.getUpvalue(index.v_index);
-                pushOperand(Value.newUpvalue(upvalue));
+                pushOperand(Value.newValuePointer(upvalue.getValuePointer()));
                 continue;
             default:
                 break;
