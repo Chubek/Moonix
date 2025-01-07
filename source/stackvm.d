@@ -1,6 +1,7 @@
 module moonix.stackvm;
 
-import std.math, std.range, std.typecons, std.container;
+import std.math, std.range, std.typecons, std.container, std.path, std.uuid,
+    std.string, std.ascii;
 
 enum MAX_CONST = 256;
 enum STACK_GROWTH_RATE = 1024;
@@ -36,12 +37,12 @@ enum Instruction
     TruncateReal,
     FloorReal,
     ConcatString,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
+    Equals,
+    Unequals,
+    Lesser,
+    LesserEqual,
+    Greater,
+    GreaterEqual,
     LoadLocal,
     LoadGlobal,
     StoreLocal,
@@ -226,7 +227,7 @@ struct Value
         return Value(v_value_pointer);
     }
 
-    bool opEquals(const Value rhs) const
+    bool opEqualsuals(const Value rhs) const
     {
         if (this.kind == rhs.kind)
         {
@@ -425,6 +426,7 @@ struct Code
     }
 
     Kind kind;
+    Address address;
 
     union
     {
@@ -432,32 +434,35 @@ struct Code
         Value v_value;
     }
 
-    this(Instruction v_instruction)
+    this(Instruction v_instruction, Address address)
     {
         this.kind = Kind.Instruction;
         this.v_instruction = v_instruction;
+        this.address = address;
     }
 
-    this(Value v_value)
+    this(Value v_value, Address address)
     {
         this.kind = Kind.Value;
         this.v_value = v_value;
+        this.address = address;
     }
 
-    static Code newInstruction(Instruction v_instruction)
+    static Code newInstruction(Instruction v_instruction, Address address)
     {
-        return Code(v_instruction);
+        return Code(v_instruction, address);
     }
 
-    static Code newValue(Value v_value)
+    static Code newValue(Value v_value, Address address)
     {
-        return Code(v_value);
+        return Code(v_value, address);
     }
 
-    static Code newEndClosureMarker()
+    static Code newEndClosureMarker(Address address)
     {
         Code code;
         code.kind = Kind.EndClosureMarker;
+        code.address = address;
         return code;
     }
 
@@ -474,6 +479,11 @@ struct Code
     bool isEndClosureMarker()
     {
         return this.kind == Kind.EndClosureMarker;
+    }
+
+    Address getAddress()
+    {
+        return this.address;
     }
 }
 
@@ -550,7 +560,7 @@ class Table
             this.value = value;
         }
 
-        bool opEquals(const Entry rhs) const
+        bool opEqualsuals(const Entry rhs) const
         {
             return this.key == rhs.key && this.value == rhs.value;
         }
@@ -674,6 +684,11 @@ class Executor
     private CallStack call_stack = null;
     private CodeStack code_stack = null;
     private CodeStack local_code_stack = null;
+
+    this(CodeStack code_stack)
+    {
+        this.code_stack = code_stack;
+    }
 
     void pushOperand(const Value new_operand)
     {
@@ -887,35 +902,35 @@ class Executor
                 assert(concatee.isString() && concated.isString());
                 pushOperand(Value.newString(concatee.v_string ~ concated.v_string));
                 continue;
-            case Instruction.Eq:
+            case Instruction.Equals:
                 auto equated = popOperand();
                 auto equatee = popOperand();
                 pushOperand(Value.newBoolean(equatee == equated));
                 continue;
-            case Instruction.Ne:
+            case Instruction.Unequals:
                 auto equated = popOperand();
                 auto equatee = popOperand();
                 pushOperand(Value.newBoolean(equatee != equated));
                 continue;
-            case Instruction.Gt:
+            case Instruction.Greater:
                 auto compared = popOperand();
                 auto comparee = popOperand();
                 assert(comparee.isNumber() && compared.isNumber());
                 pushOperand(Value.newBoolean(compared.v_number > comparee.v_number));
                 continue;
-            case Instruction.Ge:
+            case Instruction.GreaterEqual:
                 auto compared = popOperand();
                 auto comparee = popOperand();
                 assert(comparee.isNumber() && compared.isNumber());
                 pushOperand(Value.newBoolean(compared.v_number >= comparee.v_number));
                 continue;
-            case Instruction.Lt:
+            case Instruction.Lesser:
                 auto compared = popOperand();
                 auto comparee = popOperand();
                 assert(comparee.isNumber() && compared.isNumber());
                 pushOperand(Value.newBoolean(compared.v_number < comparee.v_number));
                 continue;
-            case Instruction.Le:
+            case Instruction.LesserEqual:
                 auto compared = popOperand();
                 auto comparee = popOperand();
                 assert(comparee.isNumber() && compared.isNumber());
@@ -1118,8 +1133,107 @@ class Executor
 
     void runVM()
     {
-        auto entrypoint = popOperand();
+        auto entrypoint = popFromCodeTOS();
         assert(entrypoint.isClosure());
         runClosure(entrypoint.v_closure);
+    }
+}
+
+class BytecodeTranslator
+{
+    enum LABEL_PREFIX = "@";
+    enum INSTR_PREFIX = ".";
+
+    alias JumpTable = Address[string];
+
+    CodeStack trans_codestack = null;
+    Address trans_program_counter = 0;
+    private JumpTable jump_table = null;
+    private File inter_buffer = null;
+    private string inter_buffer_temp_name = null;
+
+    this()
+    {
+        string temp_dir = tempDir();
+        this.inter_buffer_temp_name = temp_dir.buildPath("MOONIX_IR_" ~ randomUUID()
+                .toString() ~ ".tmp");
+        this.inter_buffer = File(this.inter_buffer_temp_name, "rw");
+    }
+
+    void cleanupInterBuffer()
+    {
+        this.inter_buffer.close();
+        remove(this.inter_buffer_temp_name);
+    }
+
+    void writeInter(string inter)
+    {
+        this.inter_buffer.write(inter);
+    }
+
+    void writeInterLine(string inter_line)
+    {
+        this.inter_buffer.writeln(inter_line);
+    }
+
+    string readInterLine()
+    {
+        return this.inter_buffer.readln();
+    }
+
+    void pushInstruction(Instruction instruction)
+    {
+        this.trans_codestack.push(Code.newInstruction(instruction, this.trans_program_counter));
+        this.trans_program_counter++;
+    }
+
+    void pushValue(Value value)
+    {
+        this.trans_codestack.push(Code.newValue(value, this.trans_program_counter));
+        this.trans_program_counter++;
+    }
+
+    void pushEndClosureMarker()
+    {
+        this.trans_codestack.push(Code.newEndClosureMarker(address, this.trans_program_counter));
+        this.trans_program_counter++;
+    }
+
+    void addJumpPoint(string label, Address address)
+    {
+        jump_table[label] = address;
+    }
+
+    Address getJumpTarget(string label)
+    {
+        return label in jump_table ? jump_table[label] : Address.init;
+    }
+
+    Executor createExecutor()
+    {
+        return new Executor(this.trans_codestack);
+    }
+
+    void parseInter()
+    {
+        this.inter_buffer.seek(0, SEEK_SET);
+
+        while (!this.inter_buffer.eof)
+        {
+            auto ln = readInterLine();
+
+            if (ln.startsWith(LABEL_PREFIX))
+                addJumpPoint(ln[0 .. $ - 1].strip(), this.trans_program_counter);
+            else if (ln.startsWith(INSTR_PREFIX))
+            {
+                string operator = null, opernad = null;
+                auto parts = ln.split(",");
+                operator = parts[0].strip();
+                if (parts.length == 2)
+                    operand = parts[1].strip();
+		handleInstruction(operator, operand);
+            }
+
+        }
     }
 }
